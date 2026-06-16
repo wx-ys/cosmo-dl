@@ -46,3 +46,40 @@ def test_auriga_resolve_generates_urls():
         assert len(urls) > 0
         for url in urls:
             assert url.startswith("https://")
+
+
+def test_tng_sources_exist():
+    sources = {s.name: s for s in get_builtin_sources()}
+    assert "TNG50-1" in sources
+    assert "TNG100-1" in sources
+    assert "TNG300-1" in sources
+
+
+def test_tng_source_has_groupcat_datasets():
+    sources = {s.name: s for s in get_builtin_sources()}
+    tng50 = sources["TNG50-1"]
+    assert "groupcat-0" in tng50.datasets
+    assert "groupcat-99" in tng50.datasets
+    assert len(tng50.datasets) == 200  # 100 groupcat + 100 snapshot
+
+
+def test_tng_source_resolve_groupcat():
+    sources = {s.name: s for s in get_builtin_sources()}
+    tng50 = sources["TNG50-1"]
+    urls = tng50.resolve("groupcat-99")
+    assert len(urls) == 1
+    assert "files/groupcat-99/" in urls[0]
+    assert urls[0].startswith("http://www.tng-project.org/api/TNG50-1/")
+
+
+def test_tng_source_has_api_auth():
+    """TNG source should have api-key auth when TNG_API_KEY is set, or None otherwise."""
+    import os
+    sources = {s.name: s for s in get_builtin_sources()}
+    tng50 = sources["TNG50-1"]
+    if "TNG_API_KEY" in os.environ:
+        assert tng50.auth is not None
+        assert tng50.auth.type == "api-key"  # type: ignore[union-attr]
+    else:
+        # Without env var, auth is None (user must configure via YAML)
+        pass

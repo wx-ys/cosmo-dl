@@ -93,8 +93,15 @@ result = dl.download(
 |--------|-------------|------|
 | **FIRE** | FIRE-2 public release (Flatiron Institute) — M11i, M12i | None |
 | **Auriga** | Auriga simulation, halos 1–30, level 4 | None |
+| **IllustrisTNG** | TNG50-1, TNG100-1, TNG300-1 — group catalogs & snapshots | API key |
 
-More sources (IllustrisTNG, EAGLE) coming soon.
+Set the TNG API key via environment variable:
+
+```bash
+export TNG_API_KEY="your-api-key-here"
+cosmo-dl explore TNG50-1/groupcat-99
+cosmo-dl download TNG50-1/groupcat-99 -w 8 -o ./tng-data/
+```
 
 ## Custom Sources (YAML)
 

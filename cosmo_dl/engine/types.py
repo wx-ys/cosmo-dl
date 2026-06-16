@@ -28,7 +28,7 @@ class FileEntry:
 @dataclass(slots=True)
 class AuthConfig:
     """Authentication configuration for HTTP sessions."""
-    type: Literal["none", "basic", "bearer", "cookie"] = "none"
+    type: Literal["none", "basic", "bearer", "cookie", "api-key"] = "none"
     username: str | None = None
     password: str | None = None
     token: str | None = None

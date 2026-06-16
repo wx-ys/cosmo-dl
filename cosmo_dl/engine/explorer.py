@@ -1,6 +1,7 @@
-"""URLExplorer: HTML directory listing parser for discovering files at HTTP URLs."""
+"""URLExplorer: HTML directory listing + JSON API parser for discovering files at HTTP URLs."""
 from __future__ import annotations
 
+import json
 import re
 from fnmatch import fnmatch
 from urllib.parse import urljoin
@@ -52,12 +53,15 @@ class URLExplorer:
         include: str = "*",
         exclude: str | None = None,
     ) -> list[FileEntry]:
-        """Fetch *url*, parse its HTML directory listing, and return matching entries.
+        """Fetch *url*, parse its listing, and return matching entries.
+
+        Supports both HTML directory listings and JSON API responses (e.g.,
+        the IllustrisTNG API which returns ``{"files": ["...", ...]}``).
 
         Parameters
         ----------
         url : str
-            Base URL pointing to an HTML directory listing.
+            Base URL pointing to an HTML directory listing or JSON API endpoint.
         recursive : bool
             When ``True`` (default), recurse into sub-directories.
         max_depth : int or None
@@ -72,11 +76,15 @@ class URLExplorer:
         list[FileEntry]
             List of matching file and directory entries.
         """
-        html = self._fetch_page(url)
-        if html is None:
+        page = self._fetch_page(url)
+        if page is None:
             return []
 
-        entries = self._parse_html(url, html)
+        if isinstance(page, dict):
+            entries = self._parse_json(url, page)
+        else:
+            entries = self._parse_html(url, page)
+
         result: list[FileEntry] = []
 
         for entry in entries:
@@ -105,14 +113,22 @@ class URLExplorer:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _fetch_page(self, url: str) -> str | None:
-        """Fetch *url* and return its HTML text, or ``None`` on failure."""
+    def _fetch_page(self, url: str) -> dict | str | None:
+        """Fetch *url* and return parsed JSON (dict), HTML text, or ``None`` on failure.
+
+        If the response Content-Type contains ``json``, it is parsed as JSON
+        and returned as a dict.  Otherwise the raw text is returned (HTML).
+        """
         try:
             if self._session is not None:
                 resp = self._session.get(url)
             else:
                 resp = httpx.get(url, follow_redirects=True)
             resp.raise_for_status()
+
+            ct = resp.headers.get("content-type", "")
+            if "json" in ct:
+                return resp.json()
             return resp.text
         except Exception:
             return None
@@ -173,6 +189,36 @@ class URLExplorer:
                     type=entry_type,  # type: ignore[arg-type]
                 )
             )
+
+        return entries
+
+    def _parse_json(self, base_url: str, data: dict) -> list[FileEntry]:
+        """Extract ``FileEntry`` items from a JSON API response.
+
+        Handles the IllustrisTNG API format where responses contain a
+        ``files`` key whose value is a list of file URLs.  Other keys that
+        contain URLs or nested structures may be treated as directories.
+        """
+        entries: list[FileEntry] = []
+
+        # TNG-style: {"files": ["url1", "url2", ...], "count": N}
+        if "files" in data and isinstance(data["files"], list):
+            for file_url in data["files"]:
+                if not isinstance(file_url, str):
+                    continue
+                name = file_url.rstrip("/").rsplit("/", 1)[-1]
+                entries.append(FileEntry(url=file_url, name=name, type="file"))
+            return entries
+
+        # Generic JSON: treat string values that look like URLs as files,
+        # and nested objects/arrays as directories
+        for key, value in data.items():
+            if isinstance(value, str) and value.startswith(("http://", "https://")):
+                entries.append(FileEntry(url=value, name=key, type="file"))
+            elif isinstance(value, (dict, list)):
+                # A sub-resource — treat as directory for recursion
+                sub_url = base_url.rstrip("/") + "/" + key + "/"
+                entries.append(FileEntry(url=sub_url, name=key + "/", type="dir"))
 
         return entries
 

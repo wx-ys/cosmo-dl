@@ -26,6 +26,11 @@ class TestSession:
         headers = dict(session._client.headers)
         assert headers.get("authorization") == "Bearer tok123"
 
+    def test_api_key_auth_sets_header(self):
+        session = Session(auth=AuthConfig(type="api-key", token="tng-key-123"))
+        headers = dict(session._client.headers)
+        assert headers.get("api-key") == "tng-key-123"
+
     def test_custom_headers(self):
         session = Session(headers={"X-Custom": "value"})
         headers = dict(session._client.headers)

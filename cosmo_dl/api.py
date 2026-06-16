@@ -12,7 +12,8 @@ from urllib.parse import urlparse
 from cosmo_dl.engine.downloader import Downloader, MB
 from cosmo_dl.engine.explorer import URLExplorer
 from cosmo_dl.engine.file_manager import FileManager
-from cosmo_dl.engine.types import DownloadResult, FileEntry
+from cosmo_dl.engine.session import Session
+from cosmo_dl.engine.types import AuthConfig, DownloadResult, FileEntry
 from cosmo_dl.registry.registry import Registry
 
 # ---------------------------------------------------------------------------
@@ -20,6 +21,20 @@ from cosmo_dl.registry.registry import Registry
 # ---------------------------------------------------------------------------
 
 _registry = Registry()
+
+
+def _get_auth_for_target(target: str) -> AuthConfig | None:
+    """Look up the auth config for a source/dataset target.
+
+    Returns None for raw URLs or sources without auth.
+    """
+    if target.startswith(("http://", "https://")):
+        return None
+    source_name = target.split("/", 1)[0]
+    source = _registry.get(source_name)
+    if source is not None and source.auth is not None:
+        return source.auth  # type: ignore[return-value]
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -66,13 +81,14 @@ def explore(
     max_depth: int | None = None,
     include: str = "*",
     exclude: str | None = None,
+    auth: AuthConfig | None = None,
 ) -> list[FileEntry]:
-    """Discover files at *url* by parsing an HTML directory listing.
+    """Discover files at *url* by parsing HTML directory listings or JSON APIs.
 
     Parameters
     ----------
     url : str
-        Base URL pointing to an HTML directory listing.
+        Base URL pointing to an HTML directory listing or JSON API endpoint.
     recursive : bool
         When ``True`` (default), recurse into sub-directories.
     max_depth : int or None
@@ -81,20 +97,27 @@ def explore(
         ``fnmatch``-style glob for names to *include* (default ``"*"``).
     exclude : str or None
         ``fnmatch``-style glob for names to *exclude*.
+    auth : AuthConfig or None
+        Optional authentication for the HTTP requests (e.g. TNG API key).
 
     Returns
     -------
     list[FileEntry]
         Matching file and directory entries.
     """
-    explorer = URLExplorer()
-    return explorer.explore(
-        url,
-        recursive=recursive,
-        max_depth=max_depth,
-        include=include,
-        exclude=exclude,
-    )
+    session = Session(auth=auth) if auth is not None else None
+    explorer = URLExplorer(session=session)
+    try:
+        return explorer.explore(
+            url,
+            recursive=recursive,
+            max_depth=max_depth,
+            include=include,
+            exclude=exclude,
+        )
+    finally:
+        if session is not None:
+            session.close()
 
 
 def download(
@@ -148,34 +171,39 @@ def download(
     """
     urls = _resolve_target(target)
 
-    # -- Resolve the downloader ------------------------------------------------
-    downloader = Downloader()
+    # Look up auth from the registry if the target is a source/dataset
+    auth = _get_auth_for_target(target)
+    session = Session(auth=auth) if auth is not None else None
 
-    # -- Helper: derive a local path from a URL --------------------------------
-    def _path_for_url(url: str) -> Path:
-        if dest is not None and len(urls) == 1:
-            return Path(dest)
-        parsed = urlparse(url)
-        filename = parsed.path.rstrip("/").rsplit("/", 1)[-1] or "download"
-        return Path(output_dir) / filename
+    try:
+        downloader = Downloader(session=session)
 
-    # -- Download each URL ----------------------------------------------------
-    results: list[DownloadResult] = []
-    for url in urls:
-        local_dest = _path_for_url(url)
-        result = downloader.download(
-            url,
-            local_dest,
-            resume=resume,
-            workers=workers,
-            chunk_size=chunk_size,
-            rate_limit=rate_limit,
-            progress=progress,  # type: ignore[arg-type]
-            expected_hash=expected_hash,
-            expected_size=expected_size,
-        )
-        results.append(result)
+        def _path_for_url(url: str) -> Path:
+            if dest is not None and len(urls) == 1:
+                return Path(dest)
+            parsed = urlparse(url)
+            filename = parsed.path.rstrip("/").rsplit("/", 1)[-1] or "download"
+            return Path(output_dir) / filename
 
-    if len(results) == 1:
-        return results[0]
-    return results
+        results: list[DownloadResult] = []
+        for url in urls:
+            local_dest = _path_for_url(url)
+            result = downloader.download(
+                url,
+                local_dest,
+                resume=resume,
+                workers=workers,
+                chunk_size=chunk_size,
+                rate_limit=rate_limit,
+                progress=progress,  # type: ignore[arg-type]
+                expected_hash=expected_hash,
+                expected_size=expected_size,
+            )
+            results.append(result)
+
+        if len(results) == 1:
+            return results[0]
+        return results
+    finally:
+        if session is not None:
+            session.close()

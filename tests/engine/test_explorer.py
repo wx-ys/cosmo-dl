@@ -31,6 +31,14 @@ NGINX_LISTING = """
 </pre><hr></body></html>
 """
 
+TNG_GROUP_RESPONSE = {
+    "files": [
+        "http://www.tng-project.org/api/TNG50-1/files/groupcat-99/fof_subhalo_tab_099.0.hdf5",
+        "http://www.tng-project.org/api/TNG50-1/files/groupcat-99/fof_subhalo_tab_099.1.hdf5",
+    ],
+    "count": 2,
+}
+
 
 class TestFileEntry:
     def test_file_entry_defaults(self):
@@ -107,3 +115,36 @@ class TestExplorerFilter:
         names = {e.name for e in result}
         assert "README.txt" not in names
         assert "snapshot_127.0.hdf5" in names
+
+
+class TestExplorerParseJson:
+    def test_parse_tng_style_json(self):
+        """Parse the IllustrisTNG API format: {'files': ['url1', 'url2', ...]}"""
+        explorer = URLExplorer()
+        entries = explorer._parse_json(
+            "http://www.tng-project.org/api/TNG50-1/files/groupcat-99/",
+            TNG_GROUP_RESPONSE,
+        )
+        assert len(entries) == 2
+        assert all(e.type == "file" for e in entries)
+        names = {e.name for e in entries}
+        assert "fof_subhalo_tab_099.0.hdf5" in names
+        assert "fof_subhalo_tab_099.1.hdf5" in names
+        for e in entries:
+            assert e.url.startswith("http://www.tng-project.org/")
+
+    def test_json_explore_integration(self, httpx_mock):
+        """Full explore() flow with a JSON API response."""
+        httpx_mock.add_response(
+            url="http://www.tng-project.org/api/TNG50-1/files/groupcat-99/",
+            json=TNG_GROUP_RESPONSE,
+            headers={"Content-Type": "application/json"},
+        )
+        explorer = URLExplorer()
+        result = explorer.explore(
+            "http://www.tng-project.org/api/TNG50-1/files/groupcat-99/",
+            recursive=False,
+        )
+        assert len(result) == 2
+        assert result[0].name == "fof_subhalo_tab_099.0.hdf5"
+        assert result[1].name == "fof_subhalo_tab_099.1.hdf5"
