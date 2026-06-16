@@ -1,44 +1,44 @@
-"""IllustrisTNG simulation data source.
+"""IllustrisTNG simulation data source — lazy tree structure.
 
-Auto-discovers available simulations from the TNG REST API
-(https://www.tng-project.org/api/).  Falls back to a hard-coded
-list when the API is unreachable, no API key is configured, or
-``COSMO_DL_OFFLINE`` is set.
+Levels::
 
-Requires an API key from https://www.tng-project.org (free registration).
+    TNG/                        root group
+      TNG50/                    sub-group (by simulation base name)
+        TNG50-1/                simulation
+          groupcat/             file category (→ lists indices)
+          snapshots/
+          ...
+      TNG100/
+        TNG100-1/
+          ...
+      TNG300/
+      TNG-Cluster/
+      Illustris/
 
-Set the key using any of these methods (highest priority first):
-
-1. Environment variable: ``export TNG_API_KEY="your-key"``
-2. ``.env`` file (``./.env`` or ``~/.config/cosmo-dl/.env``)
-3. CLI command: ``cosmo-dl config set tng_api_key "your-key"``
+Each level is loaded lazily with a single API call to the TNG REST API.
+In offline mode a built-in fallback list is used.
 """
 from __future__ import annotations
 
 import logging
 import os
+import re
+from collections import defaultdict
 from fnmatch import fnmatch
 
 import httpx
 
 from cosmo_dl.config import get as config_get
 from cosmo_dl.engine.types import AuthConfig
-from cosmo_dl.registry.source import DatasetInfo, SimulationSource
+from cosmo_dl.registry.source import SourceNode
 
 logger = logging.getLogger(__name__)
 
-TNG_API_BASE = "http://www.tng-project.org/api/"
+TNG_API_BASE = "https://www.tng-project.org/api/"
 TNG_GROUP = "TNG"
 
-
-def _is_offline() -> bool:
-    """Check if offline mode is active (COSMO_DL_OFFLINE env var)."""
-    return os.environ.get("COSMO_DL_OFFLINE", "").strip().lower() in (
-        "1", "true", "yes", "on",
-    )
-
 # ---------------------------------------------------------------------------
-# Fallback: hard-coded list used when the API cannot be reached
+# Fallback simulation list
 # ---------------------------------------------------------------------------
 
 _FALLBACK_SIMULATIONS = [
@@ -62,11 +62,16 @@ _FALLBACK_SIMULATIONS = [
 ]
 
 # ---------------------------------------------------------------------------
-# Auth
+# Helpers
 # ---------------------------------------------------------------------------
 
+def _is_offline() -> bool:
+    return os.environ.get("COSMO_DL_OFFLINE", "").strip().lower() in (
+        "1", "true", "yes", "on",
+    )
+
+
 def _make_auth() -> AuthConfig | None:
-    """Resolve the TNG API key from all configured sources."""
     api_key = config_get("tng_api_key")
     if api_key:
         return AuthConfig(type="api-key", token=api_key)
@@ -74,7 +79,6 @@ def _make_auth() -> AuthConfig | None:
 
 
 def _make_client() -> httpx.Client | None:
-    """Create an httpx Client with TNG auth headers, or None."""
     auth = _make_auth()
     if auth is None:
         return None
@@ -86,81 +90,71 @@ def _make_client() -> httpx.Client | None:
     return client
 
 
+def _sub_group(name: str) -> str:
+    """Extract the sub-group name from a simulation name.
+
+    >>> _sub_group("TNG50-1")       → "TNG50"
+    >>> _sub_group("TNG100-1-Dark") → "TNG100"
+    >>> _sub_group("Illustris-1")   → "Illustris"
+    >>> _sub_group("TNG-Cluster")   → "TNG-Cluster"
+    """
+    # Strip known suffixes
+    base = name
+    for suffix in ("-Dark", "-BHs", "-CRs"):
+        if base.endswith(suffix):
+            base = base[: -len(suffix)]
+    # Strip trailing run number: "TNG50-1" → "TNG50", "Illustris-1" → "Illustris"
+    m = re.match(r"^(.+?)-\d+$", base)
+    if m:
+        return m.group(1)
+    return base
+
+
 # ---------------------------------------------------------------------------
-# API discovery
+# API fetchers (one level at a time)
 # ---------------------------------------------------------------------------
 
-def discover_tng_simulations(
-    *,
-    include: str = "*",
-    exclude: str | None = None,
-) -> list[tuple[str, str]]:
-    """Query the TNG API and return a list of (name, description) tuples.
+def _fetch_simulations() -> list[tuple[str, str]]:
+    """Fetch the list of simulations from the TNG API root.
 
-    Parameters
-    ----------
-    include : str
-        ``fnmatch`` glob to filter simulation names (default ``"*"``).
-    exclude : str or None
-        ``fnmatch`` glob to exclude simulation names.
-
-    Returns
-    -------
-    list[tuple[str, str]]
-        Each element is ``(simulation_name, description)``.
-
-    If the API is unreachable, the fallback list is returned.
+    Returns list of (name, description).  Falls back on error.
     """
     if _is_offline():
-        logger.info("COSMO_DL_OFFLINE set — using fallback simulation list")
-        return _filter_sims(_FALLBACK_SIMULATIONS, include, exclude)
+        return list(_FALLBACK_SIMULATIONS)
 
     client = _make_client()
     if client is None:
-        logger.info("No TNG API key configured — using fallback simulation list")
-        return _filter_sims(_FALLBACK_SIMULATIONS, include, exclude)
+        return list(_FALLBACK_SIMULATIONS)
 
     try:
         resp = client.get(TNG_API_BASE)
         resp.raise_for_status()
         data = resp.json()
     except Exception as exc:
-        logger.warning(
-            "Failed to query TNG API at %s: %s. Using fallback list.",
-            TNG_API_BASE, exc,
-        )
-        return _filter_sims(_FALLBACK_SIMULATIONS, include, exclude)
+        logger.warning("TNG API root failed: %s. Using fallback.", exc)
+        return list(_FALLBACK_SIMULATIONS)
     finally:
         client.close()
 
-    simulations_raw = data.get("simulations", [])
-    if not simulations_raw:
-        logger.info("TNG API returned no simulations — using fallback list")
-        return _filter_sims(_FALLBACK_SIMULATIONS, include, exclude)
+    sims = data.get("simulations", [])
+    if not sims:
+        return list(_FALLBACK_SIMULATIONS)
 
-    result: list[tuple[str, str]] = []
-    for sim in simulations_raw:
-        name = sim.get("name", "")
-        desc = sim.get("description", sim.get("title", name))
-        if name:
-            result.append((name, desc))
-
-    return _filter_sims(result, include, exclude)
+    return [(s.get("name", ""), s.get("description", s.get("title", ""))) for s in sims if s.get("name")]
 
 
-def discover_file_categories(sim_name: str) -> dict[str, str]:
-    """Query the TNG API for a simulation's file categories.
+def _fetch_categories(sim_name: str) -> dict[str, list[int]]:
+    """Fetch file categories for a simulation.
 
-    Returns a dict mapping category name → API path suffix.
-
-    Example return: ``{"groupcat": "files/groupcat-", "snapshots": "files/snapshot-"}``
+    Returns dict of category_name → list of indices.
+    e.g. ``{"groupcat": [0..99], "snapshots": [0..99]}``
     """
     if _is_offline():
-        return {}
+        return {"groupcat": list(range(100)), "snapshots": list(range(100))}
 
     client = _make_client()
     if client is None:
-        return {}
+        return {"groupcat": list(range(100)), "snapshots": list(range(100))}
 
     url = f"{TNG_API_BASE}{sim_name}/"
     try:
@@ -168,108 +162,154 @@ def discover_file_categories(sim_name: str) -> dict[str, str]:
         resp.raise_for_status()
         data = resp.json()
     except Exception:
-        return {}
+        return {"groupcat": list(range(100)), "snapshots": list(range(100))}
     finally:
         client.close()
 
-    # The "files" key contains categories like:
-    # {"groupcat": [0, 1, ...], "snapshots": [0, 1, ...], ...}
     files = data.get("files", {})
-    categories: dict[str, str] = {}
+    result: dict[str, list[int]] = {}
     for cat_name, indices in files.items():
         if isinstance(indices, list) and indices:
-            categories[cat_name] = f"files/{cat_name}-"
-
-    return categories
-
-
-# ---------------------------------------------------------------------------
-# Build sources
-# ---------------------------------------------------------------------------
-
-def _filter_sims(
-    sims: list[tuple[str, str]],
-    include: str,
-    exclude: str | None,
-) -> list[tuple[str, str]]:
-    """Filter a list of (name, description) tuples by glob patterns."""
-    result = []
-    for name, desc in sims:
-        if not fnmatch(name, include):
-            continue
-        if exclude and fnmatch(name, exclude):
-            continue
-        result.append((name, desc))
+            result[cat_name] = sorted(indices)
     return result
 
 
-def _make_tng_source(name: str, description: str) -> SimulationSource:
-    """Build a TNG simulation source with standard datasets.
+# ---------------------------------------------------------------------------
+# Tree builders (each returns a dict of SourceNode children)
+# ---------------------------------------------------------------------------
 
-    Each source exposes:
-    - ``groupcat-{N}`` — group catalog for snapshot N (N=0..99)
-    - ``snapshot-{N}`` — snapshot data for snapshot N (N=0..99)
-    - Plus any additional categories discovered from the API.
+def _build_categories_children(sim_name: str, base_url: str) -> dict[str, SourceNode]:
+    """Build children for a simulation node: one child per file category."""
+    categories = _fetch_categories(sim_name)
+    children: dict[str, SourceNode] = {}
+
+    for cat_name, indices in sorted(categories.items()):
+        # Each index → a dataset node
+        index_children: dict[str, SourceNode] = {}
+        for idx in indices:
+            ds_name = f"{cat_name}-{idx}"
+            api_url = f"{base_url}files/{cat_name}-{idx}/"
+            index_children[ds_name] = SourceNode(
+                name=ds_name,
+                path=f"TNG/{_sub_group(sim_name)}/{sim_name}/{cat_name}/{ds_name}",
+                description=f"{sim_name} {cat_name}, index {idx}",
+                node_type="dataset",
+                url=api_url,
+                children={},
+                child_count=0,
+            )
+
+        cat_desc = f"{len(indices)} indices (0–{indices[-1]})" if indices else "empty"
+        children[cat_name] = SourceNode(
+            name=cat_name,
+            path=f"TNG/{_sub_group(sim_name)}/{sim_name}/{cat_name}",
+            description=f"{sim_name} {cat_name} — {cat_desc}",
+            node_type="category",
+            child_count=len(indices),
+            children=index_children,
+        )
+
+    return children
+
+
+def _build_sim_loader(sim_name: str) -> callable:
+    """Return a lazy loader for a simulation's file categories."""
+    base_url = f"{TNG_API_BASE}{sim_name}/"
+    def load() -> dict[str, SourceNode]:
+        return _build_categories_children(sim_name, base_url)
+    return load
+
+
+def _build_subgroup_children(
+    sims: list[tuple[str, str]],
+    auth: AuthConfig | None,
+) -> dict[str, SourceNode]:
+    """Build children for a sub-group node: one child per simulation in this group."""
+    children: dict[str, SourceNode] = {}
+    for name, desc in sims:
+        children[name] = SourceNode(
+            name=name,
+            path=f"TNG/{_sub_group(name)}/{name}",
+            description=desc,
+            node_type="category",
+            child_count=0,  # unknown until loaded
+            _loader=_build_sim_loader(name),
+            auth=auth,
+        )
+    return children
+
+
+def _build_tng_children(auth: AuthConfig | None) -> dict[str, SourceNode]:
+    """Build the top-level TNG children: sub-groups (TNG50, TNG100, ...)."""
+    sims = _fetch_simulations()
+
+    # Group by sub_group
+    groups: dict[str, list[tuple[str, str]]] = defaultdict(list)
+    for name, desc in sims:
+        groups[_sub_group(name)].append((name, desc))
+
+    children: dict[str, SourceNode] = {}
+    for group_name, group_sims in sorted(groups.items()):
+        group_desc = _describe_sub_group(group_name, len(group_sims))
+        children[group_name] = SourceNode(
+            name=group_name,
+            path=f"TNG/{group_name}",
+            description=group_desc,
+            node_type="group",
+            child_count=len(group_sims),
+            _loader=lambda g=group_sims, a=auth: _build_subgroup_children(g, a),
+            auth=auth,
+        )
+    return children
+
+
+def _describe_sub_group(name: str, count: int) -> str:
+    """Human-readable description for a TNG sub-group."""
+    descriptions = {
+        "TNG50": "TNG 50 Mpc/h box",
+        "TNG100": "TNG 100 Mpc/h box",
+        "TNG300": "TNG 300 Mpc/h box",
+        "TNG-Cluster": "TNG cluster zoom",
+        "Illustris": "Original Illustris 75 Mpc/h box",
+    }
+    base = descriptions.get(name, name)
+    return f"{base} — {count} simulation(s)"
+
+
+# ---------------------------------------------------------------------------
+# Public API: build the TNG root node
+# ---------------------------------------------------------------------------
+
+def build_tng_root() -> SourceNode:
+    """Return the TNG root SourceNode.
+
+    Children (sub-groups) are loaded lazily via the TNG API.
     """
-    base_url = f"{TNG_API_BASE}{name}/"
+    auth = _make_auth()
 
-    datasets: dict[str, DatasetInfo] = {}
-
-    # Try to discover file categories from the API
-    categories = discover_file_categories(name)
-
-    if categories:
-        # Build datasets from API-discovered categories
-        for cat_name, path_prefix in sorted(categories.items()):
-            # Each category has indices like [0, 1, ..., 99]
-            # We expose each index as a separate dataset
-            for i in range(100):
-                ds_name = f"{cat_name}-{i}"
-                if ds_name not in datasets:
-                    datasets[ds_name] = DatasetInfo(
-                        path=f"{path_prefix}{i}/",
-                        description=f"{name} {cat_name}, index {i}",
-                    )
+    # Count total simulations (use fallback in offline mode)
+    if _is_offline():
+        sim_count = len(_FALLBACK_SIMULATIONS)
     else:
-        # Fallback: standard groupcat + snapshot datasets (0-99)
-        for i in range(100):
-            datasets[f"groupcat-{i}"] = DatasetInfo(
-                path=f"files/groupcat-{i}/",
-                description=f"{name} group catalog, snapshot {i}",
-            )
-        for i in range(100):
-            datasets[f"snapshot-{i}"] = DatasetInfo(
-                path=f"files/snapshot-{i}/",
-                description=f"{name} snapshot {i}",
-            )
+        client = _make_client()
+        if client is not None:
+            try:
+                resp = client.get(TNG_API_BASE)
+                resp.raise_for_status()
+                sim_count = len(resp.json().get("simulations", []))
+            except Exception:
+                sim_count = len(_FALLBACK_SIMULATIONS)
+            finally:
+                client.close()
+        else:
+            sim_count = len(_FALLBACK_SIMULATIONS)
 
-    return SimulationSource(
-        name=name,
-        description=description,
-        base_url=base_url,
-        auth=_make_auth(),
-        structure="mirror",
-        datasets=datasets,
-        group=TNG_GROUP,
+    return SourceNode(
+        name="TNG",
+        path="TNG",
+        description=f"IllustrisTNG project — {sim_count} simulation(s)",
+        node_type="group",
+        child_count=sim_count,
+        _loader=lambda a=auth: _build_tng_children(a),
+        auth=auth,
     )
-
-
-def get_tng_sources(
-    include: str = "*",
-    exclude: str | None = None,
-) -> list[SimulationSource]:
-    """Return SimulationSource objects for all discovered TNG simulations.
-
-    Parameters
-    ----------
-    include : str
-        Glob pattern to filter simulation names.
-    exclude : str or None
-        Glob pattern to exclude simulation names.
-
-    Returns
-    -------
-    list[SimulationSource]
-    """
-    sims = discover_tng_simulations(include=include, exclude=exclude)
-    return [_make_tng_source(name, desc) for name, desc in sims]

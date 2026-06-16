@@ -48,38 +48,50 @@ def test_auriga_resolve_generates_urls():
             assert url.startswith("https://")
 
 
-def test_tng_sources_exist():
-    sources = {s.name: s for s in get_builtin_sources()}
-    assert "TNG50-1" in sources
-    assert "TNG100-1" in sources
-    assert "TNG300-1" in sources
+def test_tng_tree_exists():
+    """TNG root node should exist in the registry tree."""
+    from cosmo_dl.registry.builtin import get_builtin_roots
+    roots = {r.name: r for r in get_builtin_roots()}
+    assert "TNG" in roots
+    tng = roots["TNG"]
+    assert tng.child_count >= 5  # at least 5 sub-groups
 
 
-def test_tng_source_has_groupcat_datasets():
-    sources = {s.name: s for s in get_builtin_sources()}
-    tng50 = sources["TNG50-1"]
-    assert "groupcat-0" in tng50.datasets
-    assert "groupcat-99" in tng50.datasets
-    assert len(tng50.datasets) == 200  # 100 groupcat + 100 snapshot
+def test_tng_tree_subgroups():
+    """TNG should have sub-groups like TNG50, TNG100, TNG300."""
+    from cosmo_dl.registry.builtin import get_builtin_roots
+    roots = {r.name: r for r in get_builtin_roots()}
+    tng = roots["TNG"]
+    children = tng.list_children()
+    assert "TNG50" in children
+    assert "TNG100" in children
+    assert "TNG300" in children
 
 
-def test_tng_source_resolve_groupcat():
-    sources = {s.name: s for s in get_builtin_sources()}
-    tng50 = sources["TNG50-1"]
-    urls = tng50.resolve("groupcat-99")
-    assert len(urls) == 1
-    assert "files/groupcat-99/" in urls[0]
-    assert urls[0].startswith("http://www.tng-project.org/api/TNG50-1/")
+def test_tng_tree_navigate_to_simulation():
+    """Navigate TNG/TNG50/TNG50-1 and check it has categories."""
+    from cosmo_dl.registry.builtin import get_builtin_roots
+    roots = {r.name: r for r in get_builtin_roots()}
+    tng = roots["TNG"]
+    tng50 = tng.get_child("TNG50")
+    assert tng50 is not None
+    tng50_1 = tng50.get_child("TNG50-1")
+    assert tng50_1 is not None
+    # Load the simulation's categories (lazy)
+    cats = tng50_1.list_children()
+    assert tng50_1.is_loaded()
+    assert len(cats) >= 1  # at least one file category (groupcat, snapshots, etc.)
+    # Each category should have children (indices)
+    first_cat = list(cats.values())[0]
+    assert first_cat.child_count > 0
 
 
-def test_tng_source_has_api_auth():
-    """TNG source should have api-key auth when TNG_API_KEY is set, or None otherwise."""
+def test_tng_tree_has_auth():
+    """TNG root should have auth if TNG_API_KEY is set."""
+    from cosmo_dl.registry.builtin import get_builtin_roots
     import os
-    sources = {s.name: s for s in get_builtin_sources()}
-    tng50 = sources["TNG50-1"]
+    roots = {r.name: r for r in get_builtin_roots()}
+    tng = roots["TNG"]
     if "TNG_API_KEY" in os.environ:
-        assert tng50.auth is not None
-        assert tng50.auth.type == "api-key"  # type: ignore[union-attr]
-    else:
-        # Without env var, auth is None (user must configure via YAML)
-        pass
+        assert tng.auth is not None
+    # Without env var, auth is None (user configures via YAML/CLI)

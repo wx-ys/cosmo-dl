@@ -45,13 +45,15 @@ class TestRegistry:
             reg.resolve("FIRE/nonexistent")
 
     def test_register_custom_source(self):
+        """Custom sources are added as root nodes via .to_node()."""
         reg = Registry()
         custom = SimulationSource(
             name="Custom", description="C", base_url="https://x.com/"
         )
-        reg.register(custom)
+        node = custom.to_node()
+        reg._roots[node.name] = node
         assert "Custom" in reg.list()
-        assert reg.get("Custom") is custom
+        assert reg.get_node("Custom") is node
 
     def test_user_config_loaded(self):
         yaml_content = """

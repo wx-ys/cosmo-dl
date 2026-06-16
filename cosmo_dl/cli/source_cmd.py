@@ -1,104 +1,143 @@
-"""CLI command: source — manage simulation data sources."""
+"""CLI command: source — browse the simulation source tree."""
+from __future__ import annotations
+
 import click
-from cosmo_dl.api import list_sources as api_list_sources
 from cosmo_dl.registry.registry import Registry
 
 
 @click.group("source")
 def source_cmd() -> None:
-    """Manage simulation data sources."""
+    """Browse simulation data sources (like a directory tree)."""
     pass
 
 
 @source_cmd.command("list")
-@click.option("--flat", is_flag=True, default=False,
-              help="Display sources as a flat list (default: grouped)")
-def source_list(flat: bool) -> None:
-    """List all known simulation sources, grouped by project."""
+@click.argument("path", required=False, default="")
+def source_list(path: str) -> None:
+    """List contents of a source tree node.
+
+    \b
+    Examples:
+      cosmo-dl source list               # show all root groups
+      cosmo-dl source list TNG           # show TNG sub-groups
+      cosmo-dl source list TNG/TNG50     # show TNG50 simulations
+      cosmo-dl source list TNG/TNG50/TNG50-1  # show file categories
+      cosmo-dl source list TNG/TNG50/TNG50-1/groupcat  # show indices
+    """
     reg = Registry()
 
-    if not flat:
-        groups = reg.list_by_group()
-        for group_name, names in groups.items():
-            click.echo(f"\n[{group_name}]")
-            for name in names:
-                src = reg.get(name)
-                desc = src.description if src else ""
-                click.echo(f"  {name:<25s}  {desc}")
-    else:
-        for name in reg.list():
-            src = reg.get(name)
-            if src:
-                click.echo(f"  {name:<25s}  {src.description}")
+    if not path:
+        # Show root level
+        roots = reg.roots
+        for name in sorted(roots.keys()):
+            root = roots[name]
+            loaded = root.is_loaded()
+            count = root.child_count
+            count_str = f"({count})" if count > 0 else ""
+            loaded_str = "" if loaded else " [lazy]"
+            click.echo(f"  {name}/{count_str:<6s}  {root.description}{loaded_str}")
+        click.echo(f"\n  {len(roots)} source(s). Use 'source list <name>' to explore.")
+        return
+
+    node = reg.get_node(path)
+    if node is None:
+        click.echo(f"Path not found: {path!r}")
+        raise SystemExit(1)
+
+    # Show node info
+    type_label = {"group": "[group]", "category": "[category]", "dataset": "[dataset]"}
+    label = type_label.get(node.node_type, "")
+    click.echo(f"\n{label} {node.path}/")
+    click.echo(f"  {node.description}")
+
+    # List children
+    children = node.list_children()
+    if not children:
+        if node.node_type == "dataset" and node.url:
+            click.echo(f"\n  Download URL: {node.url}")
+        elif node.node_type != "dataset":
+            click.echo(f"\n  (no children)")
+        return
+
+    items = sorted(children.items())
+    for child_name, child in items:
+        if child.node_type == "dataset":
+            # Dataset: show URL
+            click.echo(f"  {child_name}/  → {child.url}")
+        else:
+            count = child.child_count
+            loaded = child.is_loaded()
+            count_str = f" ({count})" if count > 0 else ""
+            loaded_str = "" if loaded else " [lazy]"
+            click.echo(f"  {child_name}/{count_str}{loaded_str}  — {child.description}")
+
+    if node.node_type == "group" and node.is_loaded():
+        total = sum(
+            c.child_count
+            for c in children.values()
+            if c.node_type != "dataset"
+        )
+        click.echo(f"\n  {len(children)} item(s). Use 'source list {path}/<name>' to drill down.")
 
 
 @source_cmd.command("info")
-@click.argument("name")
-def source_info(name: str) -> None:
-    """Show details about a simulation source."""
+@click.argument("path")
+def source_info(path: str) -> None:
+    """Show detailed info about a source tree node."""
     reg = Registry()
-    src = reg.get(name)
-    if src is None:
-        click.echo(f"Unknown source: {name!r}")
+    node = reg.get_node(path)
+    if node is None:
+        click.echo(f"Path not found: {path!r}")
         raise SystemExit(1)
 
-    click.echo(f"Name:        {src.name}")
-    click.echo(f"Group:       {src.group or '(none)'}")
-    click.echo(f"Description: {src.description}")
-    click.echo(f"Base URL:    {src.base_url}")
-    click.echo(f"Structure:   {src.structure}")
-    click.echo(f"Auth:        {src.auth.type if src.auth else 'none'}")
-    click.echo(f"Datasets:    {len(src.datasets)}")
+    click.echo(f"Path:        {node.path}/")
+    click.echo(f"Type:        {node.node_type}")
+    click.echo(f"Description: {node.description}")
 
-    # Show first 20 datasets, then summarize
-    items = sorted(src.datasets.items())
-    for ds_name, ds in items[:20]:
-        chunks_info = f" ({ds.chunks} chunks)" if ds.chunks else ""
-        click.echo(f"  - {ds_name}: {ds.path}{chunks_info}")
-    if len(items) > 20:
-        click.echo(f"  ... and {len(items) - 20} more datasets")
+    if node.node_type == "dataset" and node.url:
+        click.echo(f"URL:         {node.url}")
+
+    if node.auth is not None:
+        auth = node.auth
+        click.echo(f"Auth:        {auth.type if hasattr(auth, 'type') else 'yes'}")
+
+    children = node.list_children()
+    if children:
+        click.echo(f"Children:    {len(children)}")
+        items = sorted(children.items())
+        for child_name, child in items[:30]:
+            click.echo(f"  - {child_name}  ({child.node_type})")
+        if len(items) > 30:
+            click.echo(f"  ... and {len(items) - 30} more")
+    else:
+        click.echo(f"Children:    none")
 
 
 @source_cmd.command("discover")
-@click.argument("group", default="TNG")
-@click.option("--include", default="*",
-              help="Glob pattern to filter simulation names")
-@click.option("--exclude", default=None,
-              help="Glob pattern to exclude simulation names")
-def source_discover(group: str, include: str, exclude: str | None) -> None:
-    """Auto-discover simulations from a source group's API.
+@click.argument("path", required=False, default="")
+def source_discover(path: str) -> None:
+    """Force lazy-load a node's children.
 
-    Currently supports: TNG (IllustrisTNG project API).
-
-    Examples:
-
-        cosmo-dl source discover TNG
-
-        cosmo-dl source discover TNG --include "TNG100*"
-
-        cosmo-dl source discover TNG --exclude "*-Dark"
+    \b
+    Example:
+      cosmo-dl source discover TNG         # load TNG sub-groups
+      cosmo-dl source discover TNG/TNG50   # load TNG50 simulations
     """
-    if group.upper() != "TNG":
-        click.echo(f"Discovery not yet supported for group {group!r}. "
-                   f"Currently supported: TNG")
-        raise SystemExit(1)
-
-    from cosmo_dl.registry.builtin.tng import discover_tng_simulations
-
-    click.echo(f"Querying TNG API for available simulations...")
-
-    sims = discover_tng_simulations(include=include, exclude=exclude)
-
-    if not sims:
-        click.echo("No simulations found.")
+    reg = Registry()
+    if not path:
+        click.echo("Usage: cosmo-dl source discover <path>")
         return
 
-    click.echo(f"\nFound {len(sims)} simulation(s):\n")
-    for name, desc in sims:
-        click.echo(f"  {name:<25s}  {desc}")
+    node = reg.get_node(path)
+    if node is None:
+        click.echo(f"Path not found: {path!r}")
+        raise SystemExit(1)
 
-    # Ask if user wants to refresh the registry
-    click.echo(
-        f"\nRun 'cosmo-dl source list' to see all available sources.\n"
-        f"Use 'cosmo-dl download {sims[0][0]}/groupcat-0' to download data."
-    )
+    if node.is_loaded():
+        click.echo(f"{path}/ is already loaded ({len(node.list_children())} children).")
+        return
+
+    click.echo(f"Loading {path}/ ...")
+    children = node.list_children()
+    loaded = node.is_loaded()
+    click.echo(f"Loaded {len(children)} child(ren). Loaded: {loaded}")
