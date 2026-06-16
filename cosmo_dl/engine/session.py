@@ -112,8 +112,9 @@ class Session:
 
     def stream(self, url: str, **kwargs: Any) -> httpx.Response:
         """Send a GET request with streaming enabled."""
-        kwargs.setdefault("method", "GET")
-        return self._client.stream(url, **kwargs)
+        method = kwargs.setdefault("method", "GET")
+        kwargs.pop("method")
+        return self._client.stream(method, url, **kwargs)
 
     def close(self) -> None:
         """Close the underlying HTTP client."""
