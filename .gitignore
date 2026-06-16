@@ -19,6 +19,23 @@ build/
 .DS_Store
 Thumbs.db
 
+# Environment and secrets
+.env
+.env.*
+
+# Logs
+*.log
+
+# Coverage
+.coverage
+coverage.xml
+htmlcov/
+
+# Cache dirs
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+
 # Project specific
 *.part
 downloads/
