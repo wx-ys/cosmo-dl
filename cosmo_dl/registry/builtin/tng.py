@@ -136,8 +136,12 @@ def _fetch_simulations() -> list[tuple[str, str]]:
     finally:
         client.close()
 
-    sims = data.get("simulations", [])
-    if not sims:
+    sims = data.get("simulations")
+    if not isinstance(sims, list) or not sims:
+        logger.warning(
+            "TNG API returned no simulation list (maybe invalid API key?). "
+            "Using fallback list."
+        )
         return list(_FALLBACK_SIMULATIONS)
 
     return [(s.get("name", ""), s.get("description", s.get("title", ""))) for s in sims if s.get("name")]
@@ -147,14 +151,17 @@ def _fetch_categories(sim_name: str) -> dict[str, list[int]]:
     """Fetch file categories for a simulation.
 
     Returns dict of category_name → list of indices.
-    e.g. ``{"groupcat": [0..99], "snapshots": [0..99]}``
+    Falls back to a sensible default when the API is unreachable
+    or returns unexpected data (e.g. wrong API key).
     """
+    fallback = {"groupcat": list(range(100)), "snapshots": list(range(100))}
+
     if _is_offline():
-        return {"groupcat": list(range(100)), "snapshots": list(range(100))}
+        return fallback
 
     client = _make_client()
     if client is None:
-        return {"groupcat": list(range(100)), "snapshots": list(range(100))}
+        return fallback
 
     url = f"{TNG_API_BASE}{sim_name}/"
     try:
@@ -162,15 +169,27 @@ def _fetch_categories(sim_name: str) -> dict[str, list[int]]:
         resp.raise_for_status()
         data = resp.json()
     except Exception:
-        return {"groupcat": list(range(100)), "snapshots": list(range(100))}
+        return fallback
     finally:
         client.close()
 
-    files = data.get("files", {})
+    # A valid TNG response has a "files" key with category→indices mapping.
+    files = data.get("files")
+    if not isinstance(files, dict) or not files:
+        logger.warning(
+            "TNG API returned unexpected data for %s (maybe invalid API key?). "
+            "Using fallback categories.", sim_name,
+        )
+        return fallback
+
     result: dict[str, list[int]] = {}
     for cat_name, indices in files.items():
         if isinstance(indices, list) and indices:
             result[cat_name] = sorted(indices)
+
+    # If we got zero usable categories, use fallback
+    if not result:
+        return fallback
     return result
 
 
