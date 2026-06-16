@@ -1,20 +1,23 @@
 """IllustrisTNG simulation data source.
 
 Requires an API key from https://www.tng-project.org (free registration).
-Set the key via environment variable ``TNG_API_KEY`` or in the auth config.
+
+Set the key using any of these methods (highest priority first):
+
+1. Environment variable: ``export TNG_API_KEY="your-key"``
+2. ``.env`` file (``./.env`` or ``~/.config/cosmo-dl/.env``): ``TNG_API_KEY=your-key``
+3. CLI command: ``cosmo-dl config set tng_api_key "your-key"``
 """
+from cosmo_dl.config import get as config_get
 from cosmo_dl.engine.types import AuthConfig
 from cosmo_dl.registry.source import SimulationSource, DatasetInfo
 
 
 def _make_auth() -> AuthConfig | None:
-    """Create an AuthConfig that reads the TNG API key from the environment."""
-    import os
-    api_key = os.environ.get("TNG_API_KEY", "")
+    """Resolve the TNG API key from all configured sources."""
+    api_key = config_get("tng_api_key")
     if api_key:
         return AuthConfig(type="api-key", token=api_key)
-    # Without an API key, requests may be limited or fail.
-    # The user can also provide the key via YAML config.
     return None
 
 

@@ -57,7 +57,7 @@ class TestEndToEndDownload:
     def test_cli_full_help_chain(self):
         """Verify CLI commands all load without error."""
         runner = CliRunner()
-        for cmd in ["download", "explore", "source"]:
+        for cmd in ["download", "explore", "source", "config"]:
             result = runner.invoke(cli, [cmd, "--help"])
             assert result.exit_code == 0
 
