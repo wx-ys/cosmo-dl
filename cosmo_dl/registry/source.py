@@ -37,6 +37,7 @@ class SimulationSource:
     auth: object | None = None  # AuthConfig from cosmo_dl.engine.types
     structure: Literal["flat", "mirror", "pattern"] = "mirror"
     datasets: dict[str, DatasetInfo] = field(default_factory=dict)
+    group: str = ""  # Group name for organizing sources in UI (e.g. "TNG", "FIRE")
 
     def resolve(self, dataset_name_or_url: str) -> list[str]:
         """Resolve a dataset name or raw URL into a list of concrete URLs.

@@ -6,6 +6,7 @@ FIRE_SOURCE = SimulationSource(
     description="FIRE-2 public release (Flatiron Institute)",
     base_url="https://users.flatironinstitute.org/~mgrudic/fire2_public_release/",
     structure="mirror",
+    group="FIRE",
     datasets={
         "m11i_res7100": DatasetInfo(
             path="core/m11i_res7100/output/",

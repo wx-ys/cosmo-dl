@@ -72,15 +72,21 @@ def _load_dotenvs() -> dict[str, str]:
 # ---------------------------------------------------------------------------
 
 def _load_toml() -> dict[str, object]:
-    """Load the TOML config file, returning empty dict if not found."""
+    """Load the TOML config file, returning empty dict if not found or empty."""
     if not CONFIG_FILE.is_file():
         return {}
     try:
         import tomllib
     except ImportError:
         import tomli as tomllib  # type: ignore[no-redef]
-    with open(CONFIG_FILE, "rb") as f:
-        return tomllib.load(f)  # type: ignore[no-any-return]
+    try:
+        with open(CONFIG_FILE, "rb") as f:
+            data = tomllib.load(f)
+    except Exception:
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return data  # type: ignore[no-any-return]
 
 
 def _save_toml(data: dict[str, object]) -> None:

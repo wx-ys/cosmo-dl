@@ -13,5 +13,6 @@ AURIGA_SOURCE = SimulationSource(
     description="Auriga simulation, halos 1-30, level 4",
     base_url="https://g-5a93c7.140599.5898.data.globus.org/level4/Original/",
     structure="pattern",
+    group="Auriga",
     datasets=_AURIGA_HALOS,
 )

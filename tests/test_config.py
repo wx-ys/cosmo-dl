@@ -8,6 +8,24 @@ import pytest
 from cosmo_dl import config
 
 
+@pytest.fixture(autouse=True)
+def _clean_config(monkeypatch, tmp_path):
+    """Ensure a clean config state before each test by redirecting all
+    config file paths to temporary directories."""
+    # Redirect TOML config to temp
+    temp_config = tmp_path / "config.toml"
+    monkeypatch.setattr(config, "CONFIG_FILE", temp_config)
+    # Redirect .env files to temp (avoid the project's real .env)
+    temp_dotenv = tmp_path / ".env"
+    monkeypatch.setattr(config, "LOCAL_ENV_FILE", temp_dotenv)
+    monkeypatch.setattr(config, "GLOBAL_ENV_FILE", temp_dotenv)
+    # Clean env vars
+    for env_var in ["TNG_API_KEY", "COSMO_DL_OFFLINE"]:
+        os.environ.pop(env_var, None)
+    yield
+    os.environ.pop("TNG_API_KEY", None)
+
+
 class TestDotenvParsing:
     def test_parse_simple(self):
         with tempfile.NamedTemporaryFile(mode="w", suffix=".env", delete=False) as f:

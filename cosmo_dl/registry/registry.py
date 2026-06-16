@@ -38,6 +38,25 @@ class Registry:
         """Return a sorted list of registered source names."""
         return sorted(self._sources.keys())
 
+    def list_by_group(self) -> dict[str, list[str]]:
+        """Return sources grouped by their ``group`` field.
+
+        Sources without a group are placed under ``"Other"``.
+
+        Returns
+        -------
+        dict[str, list[str]]
+            Group name → sorted list of source names.
+        """
+        groups: dict[str, list[str]] = {}
+        for name, src in self._sources.items():
+            group = src.group or "Other"
+            groups.setdefault(group, []).append(name)
+        # Sort each group's list
+        for g in groups:
+            groups[g].sort()
+        return dict(sorted(groups.items()))
+
     def get(self, name: str) -> SimulationSource | None:
         """Return the :class:`SimulationSource` for *name*, or ``None``."""
         return self._sources.get(name)
@@ -45,6 +64,25 @@ class Registry:
     def register(self, source: SimulationSource) -> None:
         """Register *source* programmatically."""
         self._sources[source.name] = source
+
+    def refresh_tng(self) -> int:
+        """Re-discover TNG simulations from the API and update the registry.
+
+        Returns the number of TNG sources registered.
+        """
+        from cosmo_dl.registry.builtin.tng import get_tng_sources
+
+        # Remove existing TNG sources
+        tng_names = [n for n, s in self._sources.items() if s.group == "TNG"]
+        for name in tng_names:
+            del self._sources[name]
+
+        # Re-discover
+        count = 0
+        for src in get_tng_sources():
+            self._sources[src.name] = src
+            count += 1
+        return count
 
     def resolve(self, target: str) -> list[str]:
         """Resolve *target* into a list of concrete URLs.
