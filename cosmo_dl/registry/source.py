@@ -21,7 +21,7 @@ class SourceNode:
     name: str
     path: str
     description: str = ""
-    node_type: Literal["group", "category", "dataset"] = "group"
+    node_type: Literal["group", "category", "dataset", "simulation"] = "group"
 
     # Children — None means "not loaded yet"
     children: dict[str, SourceNode] | None = None
@@ -36,6 +36,12 @@ class SourceNode:
     # Only for dataset nodes
     url: str | None = None
     base_url: str | None = field(default=None, repr=False, compare=False)
+
+    # Arbitrary metadata (boxsize, cosmology, num_snapshots, ...)
+    metadata: dict[str, object] = field(default_factory=dict)
+
+    # Explicit download relative path mapping (overrides URL-derived path)
+    download_relpath: str | None = None
 
     # ------------------------------------------------------------------
     # Public API
@@ -88,6 +94,20 @@ class SourceNode:
         for child in self.list_children().values():
             urls.extend(child.resolve())
         return urls
+
+    def resolve_with_relpath(self) -> list[tuple[str, str | None]]:
+        """Return ``(URL, download_relpath)`` pairs for this node and descendants.
+
+        - For ``dataset`` nodes: returns ``[(self.url, self.download_relpath)]``.
+        - For other nodes: collects pairs from all descendant leaves.
+        """
+        if self.node_type == "dataset" and self.url is not None:
+            return [(self.url, self.download_relpath)]
+
+        pairs: list[tuple[str, str | None]] = []
+        for child in self.list_children().values():
+            pairs.extend(child.resolve_with_relpath())
+        return pairs
 
     def tree_summary(self, max_items: int = 20) -> str:
         """Return a compact tree view."""

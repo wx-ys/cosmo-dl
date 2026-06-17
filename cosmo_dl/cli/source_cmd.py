@@ -45,10 +45,29 @@ def source_list(path: str) -> None:
         raise SystemExit(1)
 
     # Show node info
-    type_label = {"group": "[group]", "category": "[category]", "dataset": "[dataset]"}
+    type_label = {
+        "group": "[group]", "category": "[category]",
+        "dataset": "[dataset]", "simulation": "[simulation]",
+    }
     label = type_label.get(node.node_type, "")
     click.echo(f"\n{label} {node.path}/")
     click.echo(f"  {node.description}")
+
+    # Show simulation metadata
+    if node.node_type == "simulation" and node.metadata:
+        box = node.metadata.get("boxsize")
+        cosmo = node.metadata.get("cosmology")
+        nsnap = node.metadata.get("num_snapshots")
+        if box and isinstance(box, (int, float)) and float(box) > 0:
+            click.echo(f"  Box size:     {box}")
+        if cosmo and str(cosmo) != "unknown":
+            click.echo(f"  Cosmology:    {cosmo}")
+        if nsnap:
+            click.echo(f"  Snapshots:    {nsnap}")
+        if node.metadata.get("is_subbox"):
+            parent = node.metadata.get("parent_simulation")
+            if parent:
+                click.echo(f"  Parent sim:   {parent}")
 
     # List children
     children = node.list_children()
@@ -62,8 +81,11 @@ def source_list(path: str) -> None:
     items = sorted(children.items())
     for child_name, child in items:
         if child.node_type == "dataset":
-            # Dataset: show URL
-            click.echo(f"  {child_name}/  → {child.url}")
+            # Dataset: show URL and optional download path
+            line = f"  {child_name}  → {child.url}"
+            if child.download_relpath:
+                line += f"  [→ {child.download_relpath}]"
+            click.echo(line)
         else:
             count = child.child_count
             loaded = child.is_loaded()

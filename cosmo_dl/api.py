@@ -74,6 +74,34 @@ def _resolve_target(target: str) -> list[str]:
     return _registry.resolve(target)
 
 
+def _resolve_target_with_paths(target: str) -> list[tuple[str, str | None]]:
+    """Resolve a target into ``(URL, download_relpath)`` pairs.
+
+    Like :func:`_resolve_target` but also returns the configured
+    download relative path for each URL.  Raw URLs get ``None`` paths.
+    """
+    if target.startswith(("http://", "https://")):
+        return [(target, None)]
+
+    # Try tree navigation
+    node = _registry.get_node(target)
+    if node is not None:
+        return node.resolve_with_relpath()
+
+    # Legacy fallback
+    if "/" in target:
+        source_name, dataset = target.split("/", 1)
+        src = _registry._roots.get(source_name)
+        if src is not None and hasattr(src, 'base_url') and src.base_url:
+            child = src.get_child(dataset)
+            if child is not None:
+                return child.resolve_with_relpath()
+            raise KeyError(f"Unknown dataset: {dataset!r}")
+        raise ValueError(f"Unknown source: {source_name!r}")
+
+    raise ValueError(f"Unknown target: {target!r}")
+
+
 def explore(
     url: str,
     *,
