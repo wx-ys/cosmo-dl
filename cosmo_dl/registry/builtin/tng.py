@@ -39,7 +39,9 @@ import os
 import re
 from collections import defaultdict
 
-import httpx
+import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 from cosmo_dl.config import get as config_get
 from cosmo_dl.engine.types import AuthConfig
@@ -134,6 +136,10 @@ _SINGLE_FILE_KEYS: dict[str, str] = {
     "ics": "snap_ics.hdf5",
 }
 
+# Timeout for API requests: (connect, read) — generous read timeout for large files
+_API_TIMEOUT = (10, 300)
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -152,16 +158,29 @@ def _make_auth() -> AuthConfig | None:
     return None
 
 
-def _make_client() -> httpx.Client | None:
+def _make_session() -> requests.Session | None:
+    """Create a requests.Session configured with TNG API key and retries."""
     auth = _make_auth()
     if auth is None:
         return None
-    client = httpx.Client(timeout=httpx.Timeout(30), follow_redirects=True)
+
+    session = requests.Session()
     if auth.type == "api-key" and auth.token:
-        client.headers["API-Key"] = auth.token
+        session.headers["api-key"] = auth.token
     if auth.custom_headers:
-        client.headers.update(auth.custom_headers)
-    return client
+        session.headers.update(auth.custom_headers)
+
+    # Retry adapter (matching proven TNG downloader config)
+    retries = Retry(
+        total=5, backoff_factor=1,
+        status_forcelist=(429, 500, 502, 503, 504),
+        allowed_methods=frozenset(['GET', 'HEAD', 'OPTIONS']),
+    )
+    adapter = HTTPAdapter(max_retries=retries, pool_connections=100, pool_maxsize=100)
+    session.mount('http://', adapter)
+    session.mount('https://', adapter)
+
+    return session
 
 
 # ---------------------------------------------------------------------------
@@ -229,19 +248,19 @@ def _fetch_simulations() -> list[tuple[str, str, int, bool]]:
     if _is_offline():
         return list(_FALLBACK_SIMULATIONS)
 
-    client = _make_client()
-    if client is None:
+    session = _make_session()
+    if session is None:
         return list(_FALLBACK_SIMULATIONS)
 
     try:
-        resp = client.get(TNG_API_BASE)
+        resp = session.get(TNG_API_BASE, timeout=_API_TIMEOUT)
         resp.raise_for_status()
         data = resp.json()
     except Exception as exc:
         logger.warning("TNG API root failed: %s. Using fallback.", exc)
         return list(_FALLBACK_SIMULATIONS)
     finally:
-        client.close()
+        session.close()
 
     sims = data.get("simulations")
     if not isinstance(sims, list) or not sims:
@@ -286,18 +305,18 @@ def _fetch_simulation_detail(sim_name: str) -> dict:
                 break
         return fallback
 
-    client = _make_client()
-    if client is None:
+    session = _make_session()
+    if session is None:
         return fallback
 
     try:
-        resp = client.get(f"{TNG_API_BASE}{sim_name}/")
+        resp = session.get(f"{TNG_API_BASE}{sim_name}/", timeout=_API_TIMEOUT)
         resp.raise_for_status()
         return resp.json()
     except Exception:
         return fallback
     finally:
-        client.close()
+        session.close()
 
 
 def _fetch_snapshots(sim_name: str) -> list[dict]:
@@ -307,14 +326,16 @@ def _fetch_snapshots(sim_name: str) -> list[dict]:
         nsnap = detail.get("num_snapshots", 100)
         return [{"number": i, "redshift": None} for i in range(nsnap)]
 
-    client = _make_client()
-    if client is None:
+    session = _make_session()
+    if session is None:
         detail = _fetch_simulation_detail(sim_name)
         nsnap = detail.get("num_snapshots", 100)
         return [{"number": i, "redshift": None} for i in range(nsnap)]
 
     try:
-        resp = client.get(f"{TNG_API_BASE}{sim_name}/snapshots/")
+        resp = session.get(
+            f"{TNG_API_BASE}{sim_name}/snapshots/", timeout=_API_TIMEOUT,
+        )
         resp.raise_for_status()
         return resp.json()
     except Exception:
@@ -322,7 +343,7 @@ def _fetch_snapshots(sim_name: str) -> list[dict]:
         nsnap = detail.get("num_snapshots", 100)
         return [{"number": i, "redshift": None} for i in range(nsnap)]
     finally:
-        client.close()
+        session.close()
 
 
 def _fetch_file_list(url: str) -> list[tuple[str, bool]]:
@@ -339,19 +360,19 @@ def _fetch_file_list(url: str) -> list[tuple[str, bool]]:
     if _is_offline():
         return []
 
-    client = _make_client()
-    if client is None:
+    session = _make_session()
+    if session is None:
         return []
 
     try:
-        resp = client.get(url)
+        resp = session.get(url, timeout=_API_TIMEOUT)
         resp.raise_for_status()
         data = resp.json()
     except Exception as exc:
         logger.debug("Failed to fetch file list from %s: %s", url, exc)
         return []
     finally:
-        client.close()
+        session.close()
 
     entries: list[str] = []
 
@@ -943,16 +964,16 @@ def build_tng_root() -> SourceNode:
     if _is_offline():
         sim_count = len(_FALLBACK_SIMULATIONS)
     else:
-        client = _make_client()
-        if client is not None:
+        session = _make_session()
+        if session is not None:
             try:
-                resp = client.get(TNG_API_BASE)
+                resp = session.get(TNG_API_BASE, timeout=_API_TIMEOUT)
                 resp.raise_for_status()
                 sim_count = len(resp.json().get("simulations", []))
             except Exception:
                 sim_count = len(_FALLBACK_SIMULATIONS)
             finally:
-                client.close()
+                session.close()
         else:
             sim_count = len(_FALLBACK_SIMULATIONS)
 

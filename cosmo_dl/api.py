@@ -6,6 +6,7 @@ and :func:`download`.
 from __future__ import annotations
 
 import os
+import time
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -150,6 +151,17 @@ def explore(
             session.close()
 
 
+def _fmt_speed(bytes_per_second: float) -> str:
+    """Format a bytes-per-second rate as a human-readable string."""
+    if bytes_per_second >= 1024 * 1024:
+        return f"{bytes_per_second / (1024 * 1024):.1f}MB/s"
+    elif bytes_per_second >= 1024:
+        return f"{bytes_per_second / 1024:.0f}KB/s"
+    elif bytes_per_second > 0:
+        return f"{bytes_per_second:.0f}B/s"
+    return ""
+
+
 def download(
     target: str,
     dest: str | Path | None = None,
@@ -231,13 +243,39 @@ def download(
         n_failed = 0
         last_speed = ""
         url_iter = _tqdm(pairs, desc="Files", unit="file", disable=len(pairs) <= 1)
+
+        # Real-time speed tracking for the progress bar postfix
+        _speed_t0 = time.monotonic()
+        _speed_last_bytes = 0
+
+        def _progress_cb(downloaded: int, _total: int) -> None:
+            """Update the tqdm postfix with real-time download speed."""
+            nonlocal _speed_t0, _speed_last_bytes
+            now = time.monotonic()
+            elapsed = now - _speed_t0
+            if elapsed >= 0.5:
+                speed = (downloaded - _speed_last_bytes) / elapsed if elapsed > 0 else 0
+                speed_str = _fmt_speed(speed)
+                url_iter.set_postfix_str(f"{_current_fname[:20]} {speed_str}")
+                _speed_t0 = now
+                _speed_last_bytes = downloaded
+
+        _current_fname = ""
+
         for url, relpath in url_iter:
             # TNG file downloads work over HTTP (HTTPS returns 403).
             # Keep URLs as-is — do NOT normalize to HTTPS.
             local_dest = _path_for_pair(url, relpath)
             fname = local_dest.name
+            _current_fname = fname
+
+            # Show last file's final speed, or just the filename for the first
             postfix = f"{fname[:25]} {last_speed}" if last_speed else fname[:30]
             url_iter.set_postfix_str(postfix)
+
+            # Reset speed tracker for this file
+            _speed_t0 = time.monotonic()
+            _speed_last_bytes = 0
 
             result = downloader.download(
                 url,
@@ -246,7 +284,7 @@ def download(
                 workers=workers,
                 chunk_size=chunk_size,
                 rate_limit=rate_limit,
-                progress=progress,  # type: ignore[arg-type]
+                progress=_progress_cb if progress is None else progress,  # type: ignore[arg-type]
                 expected_hash=expected_hash,
                 expected_size=expected_size,
             )
@@ -254,9 +292,12 @@ def download(
             if not result.success:
                 n_failed += 1
                 _tqdm.write(f"  FAIL  {local_dest}\n        {result.message}")
-            elif result.speed and result.speed > 0:
-                speed_mb = result.speed / (1024 * 1024)
-                last_speed = f"{speed_mb:.1f}MB/s"
+            else:
+                speed_mb = result.speed / (1024 * 1024) if result.speed else 0
+                last_speed = f"{speed_mb:.1f}MB/s" if speed_mb > 0 else ""
+                # Show final speed for this file
+                if last_speed:
+                    url_iter.set_postfix_str(f"{fname[:20]} {last_speed}")
             results.append(result)
 
         if len(results) == 1:

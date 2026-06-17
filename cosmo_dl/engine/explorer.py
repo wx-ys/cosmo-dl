@@ -1,12 +1,11 @@
 """URLExplorer: HTML directory listing + JSON API parser for discovering files at HTTP URLs."""
 from __future__ import annotations
 
-import json
 import re
 from fnmatch import fnmatch
 from urllib.parse import urljoin
 
-import httpx
+import requests
 
 from cosmo_dl.engine.session import Session
 from cosmo_dl.engine.types import FileEntry
@@ -34,7 +33,7 @@ class URLExplorer:
     ----------
     session : Session or None
         Optional cosmo-dl Session for authenticated / configured requests.
-        When *None*, ad-hoc ``httpx.get`` calls are used.
+        When *None*, ad-hoc ``requests.get`` calls are used.
     """
 
     def __init__(self, session: Session | None = None) -> None:
@@ -123,7 +122,7 @@ class URLExplorer:
             if self._session is not None:
                 resp = self._session.get(url)
             else:
-                resp = httpx.get(url, follow_redirects=True)
+                resp = requests.get(url, timeout=30)
             resp.raise_for_status()
 
             ct = resp.headers.get("content-type", "")
