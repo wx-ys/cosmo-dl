@@ -15,6 +15,7 @@ from cosmo_dl.engine.file_manager import FileManager
 from cosmo_dl.engine.session import Session
 from cosmo_dl.engine.types import AuthConfig, DownloadResult, FileEntry
 from cosmo_dl.registry.registry import Registry
+from tqdm import tqdm as _tqdm
 
 # ---------------------------------------------------------------------------
 # Module-level singleton
@@ -214,8 +215,11 @@ def download(
             return Path(output_dir) / filename
 
         results: list[DownloadResult] = []
-        for url in urls:
+        url_iter = _tqdm(urls, desc="Files", unit="file", disable=len(urls) <= 1)
+        for url in url_iter:
             local_dest = _path_for_url(url)
+            fname = local_dest.name
+            url_iter.set_postfix_str(fname[:40])
             result = downloader.download(
                 url,
                 local_dest,
