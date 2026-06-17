@@ -1,5 +1,6 @@
 """Tests for the public Python API."""
 import pytest
+import responses
 from cosmo_dl.api import download, explore, list_sources
 from cosmo_dl.registry.source import DatasetInfo
 from cosmo_dl.engine.types import DownloadResult, FileEntry
@@ -14,16 +15,19 @@ class TestListSources:
 
 
 class TestExplore:
-    def test_explore_url(self, httpx_mock):
+    @responses.activate
+    def test_explore_url(self):
         html = """
         <html><body>
         <a href="file1.hdf5">file1.hdf5</a>
         <a href="file2.hdf5">file2.hdf5</a>
         </body></html>
         """
-        httpx_mock.add_response(
-            url="https://example.com/data/",
-            html=html,
+        responses.add(
+            responses.GET,
+            "https://example.com/data/",
+            body=html,
+            headers={"Content-Type": "text/html"},
         )
         files = explore("https://example.com/data/", recursive=False)
         assert len(files) == 2
@@ -33,11 +37,13 @@ class TestExplore:
 
 
 class TestDownload:
-    def test_download_url(self, httpx_mock, tmp_path):
+    @responses.activate
+    def test_download_url(self, tmp_path):
         content = b"test data" * 100
-        httpx_mock.add_response(
-            url="https://example.com/test.hdf5",
-            content=content,
+        responses.add(
+            responses.GET,
+            "https://example.com/test.hdf5",
+            body=content,
             headers={"Content-Length": str(len(content))},
         )
         dest = tmp_path / "test.hdf5"
@@ -46,13 +52,8 @@ class TestDownload:
         assert result.success is True
         assert dest.read_bytes() == content
 
-    @pytest.mark.httpx_mock(assert_all_responses_were_requested=False)
-    def test_download_source_dataset(self, httpx_mock, tmp_path):
+    def test_download_source_dataset(self, tmp_path):
         content = b"fire data"
-        httpx_mock.add_response(
-            url="https://users.flatironinstitute.org/~mgrudic/fire2_public_release/core/m11i_res7100/output/",
-            html="<html><body><a href='snap.hdf5'>snap.hdf5</a></body></html>",
-        )
         from cosmo_dl.api import _resolve_target
         urls = _resolve_target("FIRE/m11i_res7100")
         assert len(urls) > 0

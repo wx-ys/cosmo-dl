@@ -1,5 +1,6 @@
 """Tests for URLExplorer."""
 import pytest
+import responses
 from cosmo_dl.engine.explorer import URLExplorer, FileEntry
 
 
@@ -92,10 +93,13 @@ class TestExplorerParseHtml:
 
 
 class TestExplorerFilter:
-    def test_include_filter(self, httpx_mock):
-        httpx_mock.add_response(
-            url="https://host/data/",
-            html=APACHE_LISTING,
+    @responses.activate
+    def test_include_filter(self):
+        responses.add(
+            responses.GET,
+            "https://host/data/",
+            body=APACHE_LISTING,
+            headers={"Content-Type": "text/html"},
         )
         explorer = URLExplorer()
         result = explorer.explore("https://host/data/", recursive=False,
@@ -104,10 +108,13 @@ class TestExplorerFilter:
         assert "snapshot_127.0.hdf5" in names
         assert "README.txt" not in names
 
-    def test_exclude_filter(self, httpx_mock):
-        httpx_mock.add_response(
-            url="https://host/data/",
-            html=APACHE_LISTING,
+    @responses.activate
+    def test_exclude_filter(self):
+        responses.add(
+            responses.GET,
+            "https://host/data/",
+            body=APACHE_LISTING,
+            headers={"Content-Type": "text/html"},
         )
         explorer = URLExplorer()
         result = explorer.explore("https://host/data/", recursive=False,
@@ -133,10 +140,12 @@ class TestExplorerParseJson:
         for e in entries:
             assert e.url.startswith("http://www.tng-project.org/")
 
-    def test_json_explore_integration(self, httpx_mock):
+    @responses.activate
+    def test_json_explore_integration(self):
         """Full explore() flow with a JSON API response."""
-        httpx_mock.add_response(
-            url="http://www.tng-project.org/api/TNG50-1/files/groupcat-99/",
+        responses.add(
+            responses.GET,
+            "http://www.tng-project.org/api/TNG50-1/files/groupcat-99/",
             json=TNG_GROUP_RESPONSE,
             headers={"Content-Type": "application/json"},
         )

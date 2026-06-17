@@ -1,17 +1,20 @@
 """Integration tests for cosmo-dl end-to-end workflows."""
 import pytest
+import responses
 from click.testing import CliRunner
 from cosmo_dl.cli.main import cli
 from cosmo_dl.api import download, explore, list_sources
 
 
 class TestEndToEndDownload:
-    def test_download_single_file(self, httpx_mock, tmp_path):
+    @responses.activate
+    def test_download_single_file(self, tmp_path):
         """Full flow: download a single file via the API."""
         content = b"integration test data" * 500
-        httpx_mock.add_response(
-            url="https://example.com/sim/data.hdf5",
-            content=content,
+        responses.add(
+            responses.GET,
+            "https://example.com/sim/data.hdf5",
+            body=content,
             headers={"Content-Length": str(len(content))},
         )
         result = download(
@@ -22,7 +25,8 @@ class TestEndToEndDownload:
         assert result.success is True
         assert (tmp_path / "data.hdf5").read_bytes() == content
 
-    def test_download_with_explore(self, httpx_mock, tmp_path):
+    @responses.activate
+    def test_download_with_explore(self, tmp_path):
         """Full flow: explore then download."""
         listing = """
         <html><body>
@@ -31,18 +35,22 @@ class TestEndToEndDownload:
         <a href="file_b.hdf5">file_b.hdf5</a>
         </body></html>
         """
-        httpx_mock.add_response(
-            url="https://example.com/data/",
-            html=listing,
+        responses.add(
+            responses.GET,
+            "https://example.com/data/",
+            body=listing,
+            headers={"Content-Type": "text/html"},
         )
-        httpx_mock.add_response(
-            url="https://example.com/data/file_a.hdf5",
-            content=b"A" * 1000,
+        responses.add(
+            responses.GET,
+            "https://example.com/data/file_a.hdf5",
+            body=b"A" * 1000,
             headers={"Content-Length": "1000"},
         )
-        httpx_mock.add_response(
-            url="https://example.com/data/file_b.hdf5",
-            content=b"B" * 2000,
+        responses.add(
+            responses.GET,
+            "https://example.com/data/file_b.hdf5",
+            body=b"B" * 2000,
             headers={"Content-Length": "2000"},
         )
 
@@ -72,10 +80,12 @@ class TestEndToEndDownload:
 
 
 class TestErrorHandling:
-    def test_download_404_returns_failure(self, httpx_mock, tmp_path):
-        httpx_mock.add_response(
-            url="https://example.com/missing.hdf5",
-            status_code=404,
+    @responses.activate
+    def test_download_404_returns_failure(self, tmp_path):
+        responses.add(
+            responses.GET,
+            "https://example.com/missing.hdf5",
+            status=404,
         )
         result = download(
             "https://example.com/missing.hdf5",
@@ -84,10 +94,12 @@ class TestErrorHandling:
         )
         assert result.success is False
 
-    def test_explore_bad_url_returns_empty(self, httpx_mock):
-        httpx_mock.add_response(
-            url="https://bad.example.com/",
-            status_code=500,
+    @responses.activate
+    def test_explore_bad_url_returns_empty(self):
+        responses.add(
+            responses.GET,
+            "https://bad.example.com/",
+            status=500,
         )
         files = explore("https://bad.example.com/")
         assert files == []

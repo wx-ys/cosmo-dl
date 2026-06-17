@@ -2,6 +2,7 @@
 import tempfile
 from pathlib import Path
 import pytest
+import responses
 from cosmo_dl.engine.downloader import Downloader, MB
 from cosmo_dl.engine.session import Session
 from cosmo_dl.engine.rate_limiter import RateLimiter
@@ -9,11 +10,13 @@ from cosmo_dl.engine.types import DownloadResult
 
 
 class TestDownloader:
-    def test_download_small_file(self, httpx_mock, tmp_path):
+    @responses.activate
+    def test_download_small_file(self, tmp_path):
         content = b"hello cosmos" * 100
-        httpx_mock.add_response(
-            url="https://example.com/small.hdf5",
-            content=content,
+        responses.add(
+            responses.GET,
+            "https://example.com/small.hdf5",
+            body=content,
             headers={"Content-Length": str(len(content))},
         )
         dest = tmp_path / "small.hdf5"
@@ -24,14 +27,16 @@ class TestDownloader:
         assert result.size == len(content)
         assert dest.read_bytes() == content
 
-    def test_download_with_expected_hash(self, httpx_mock, tmp_path):
+    @responses.activate
+    def test_download_with_expected_hash(self, tmp_path):
         import hashlib
         content = b"verify this file"
         expected = hashlib.sha256(content).hexdigest()
 
-        httpx_mock.add_response(
-            url="https://example.com/verified.hdf5",
-            content=content,
+        responses.add(
+            responses.GET,
+            "https://example.com/verified.hdf5",
+            body=content,
             headers={"Content-Length": str(len(content))},
         )
         dest = tmp_path / "verified.hdf5"
@@ -42,11 +47,13 @@ class TestDownloader:
         )
         assert result.success is True
 
-    def test_download_hash_mismatch_fails(self, httpx_mock, tmp_path):
+    @responses.activate
+    def test_download_hash_mismatch_fails(self, tmp_path):
         content = b"wrong content"
-        httpx_mock.add_response(
-            url="https://example.com/bad.hdf5",
-            content=content,
+        responses.add(
+            responses.GET,
+            "https://example.com/bad.hdf5",
+            body=content,
             headers={"Content-Length": str(len(content))},
         )
         dest = tmp_path / "bad.hdf5"
@@ -57,18 +64,20 @@ class TestDownloader:
         )
         assert result.success is False
 
-    def test_download_resume_from_partial(self, httpx_mock, tmp_path):
+    @responses.activate
+    def test_download_resume_from_partial(self, tmp_path):
         content = b"A" * 5000
         partial_content = content[1000:]
 
-        httpx_mock.add_response(
-            url="https://example.com/resume.hdf5",
-            content=partial_content,
+        responses.add(
+            responses.GET,
+            "https://example.com/resume.hdf5",
+            body=partial_content,
             headers={
-                "Content-Length": "5000",
+                "Content-Length": "4000",
                 "Content-Range": "bytes 1000-4999/5000",
             },
-            match_headers={"Range": "bytes=1000-"},
+            match=[responses.matchers.header_matcher({"Range": "bytes=1000-"})],
         )
         dest = tmp_path / "resume.hdf5"
         dest.write_bytes(content[:1000])
@@ -79,11 +88,13 @@ class TestDownloader:
         assert result.success is True
         assert dest.read_bytes() == content
 
-    def test_download_creates_parent_dirs(self, httpx_mock, tmp_path):
+    @responses.activate
+    def test_download_creates_parent_dirs(self, tmp_path):
         content = b"nested file"
-        httpx_mock.add_response(
-            url="https://example.com/a/b/c/file.hdf5",
-            content=content,
+        responses.add(
+            responses.GET,
+            "https://example.com/a/b/c/file.hdf5",
+            body=content,
             headers={"Content-Length": str(len(content))},
         )
         dest = tmp_path / "deep" / "nested" / "file.hdf5"
@@ -92,11 +103,13 @@ class TestDownloader:
         assert result.success is True
         assert dest.exists()
 
-    def test_download_result_has_elapsed_and_speed(self, httpx_mock, tmp_path):
+    @responses.activate
+    def test_download_result_has_elapsed_and_speed(self, tmp_path):
         content = b"x" * 10000
-        httpx_mock.add_response(
-            url="https://example.com/timed.hdf5",
-            content=content,
+        responses.add(
+            responses.GET,
+            "https://example.com/timed.hdf5",
+            body=content,
             headers={"Content-Length": str(len(content))},
         )
         dest = tmp_path / "timed.hdf5"
@@ -105,11 +118,13 @@ class TestDownloader:
         assert result.elapsed > 0
         assert result.speed > 0
 
-    def test_download_with_rate_limit(self, httpx_mock, tmp_path):
+    @responses.activate
+    def test_download_with_rate_limit(self, tmp_path):
         content = b"x" * 5000
-        httpx_mock.add_response(
-            url="https://example.com/limited.hdf5",
-            content=content,
+        responses.add(
+            responses.GET,
+            "https://example.com/limited.hdf5",
+            body=content,
             headers={"Content-Length": str(len(content))},
         )
         dest = tmp_path / "limited.hdf5"
@@ -118,10 +133,12 @@ class TestDownloader:
         result = dl.download("https://example.com/limited.hdf5", dest, workers=1)
         assert result.success is True
 
-    def test_404_returns_failure(self, httpx_mock, tmp_path):
-        httpx_mock.add_response(
-            url="https://example.com/missing.hdf5",
-            status_code=404,
+    @responses.activate
+    def test_404_returns_failure(self, tmp_path):
+        responses.add(
+            responses.GET,
+            "https://example.com/missing.hdf5",
+            status=404,
         )
         dest = tmp_path / "missing.hdf5"
         dl = Downloader()
