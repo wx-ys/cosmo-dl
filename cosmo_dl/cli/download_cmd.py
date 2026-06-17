@@ -5,14 +5,17 @@ from cosmo_dl.engine.file_manager import FileManager
 
 @click.command("download")
 @click.argument("target")
-@click.option("-w", "--workers", type=int, default=4)
+@click.option("-w", "--workers", type=int, default=4,
+              help="Chunk-parallel threads per file (for large files).")
+@click.option("-fw", "--file-workers", type=int, default=4,
+              help="Number of files to download concurrently.")
 @click.option("-l", "--limit", default=None)
 @click.option("-o", "--output", default="./cosmo-dl-downloads")
 @click.option("--resume/--no-resume", default=True)
 @click.option("--hash", "hash_algo", default=None)
 @click.option("--recursive/--no-recursive", default=False)
 @click.option("--include", default="*")
-def download_cmd(target, workers, limit, output, resume, hash_algo, recursive, include):
+def download_cmd(target, workers, file_workers, limit, output, resume, hash_algo, recursive, include):
     """Download simulation data from URL or source/dataset."""
     if recursive and (target.startswith("http://") or target.startswith("https://")):
         click.echo(f"Exploring {target} ...")
@@ -29,7 +32,7 @@ def download_cmd(target, workers, limit, output, resume, hash_algo, recursive, i
                 local_path = FileManager.mirror_path(entry.url, base_url=target, local_root=output)
                 local_path.parent.mkdir(parents=True, exist_ok=True)
                 try:
-                    result = api_download(entry.url, local_path, workers=workers, rate_limit=limit, resume=resume)
+                    result = api_download(entry.url, local_path, workers=workers, file_workers=file_workers, rate_limit=limit, resume=resume)
                     if result.success:
                         succeeded += 1
                     else:
@@ -41,7 +44,7 @@ def download_cmd(target, workers, limit, output, resume, hash_algo, recursive, i
                 pbar.update(1)
         click.echo(f"\nDone. {succeeded} succeeded, {failed} failed.")
     else:
-        result = api_download(target, output_dir=output, workers=workers, rate_limit=limit, resume=resume)
+        result = api_download(target, output_dir=output, workers=workers, file_workers=file_workers, rate_limit=limit, resume=resume)
         if isinstance(result, list):
             for r in result:
                 status = "OK" if r.success else f"FAILED: {r.message}"

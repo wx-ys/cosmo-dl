@@ -6,7 +6,9 @@ and :func:`download`.
 from __future__ import annotations
 
 import os
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -168,6 +170,7 @@ def download(
     *,
     resume: bool = True,
     workers: int = 4,
+    file_workers: int = 4,
     chunk_size: int = 10 * MB,
     rate_limit: str | None = None,
     progress: object = None,
@@ -190,13 +193,20 @@ def download(
         If ``True`` (default), attempt to resume an interrupted download.
     workers : int
         Number of parallel download threads per file.  Set to ``1`` for
-        single-threaded streaming.
+        single-threaded streaming.  When *file_workers* > 1 and downloading
+        multiple files, this is automatically reduced to 1 per file (file-level
+        parallelism is more efficient for many small files).
+    file_workers : int
+        Number of files to download concurrently.  Set to ``1`` for sequential
+        downloads (current behavior).  Default is 4.
     chunk_size : int
         Size of each download chunk in bytes (default 10 MiB).
     rate_limit : str or None
-        Bandwidth cap, e.g. ``"10M"``, ``"500K"``.
+        Bandwidth cap, e.g. ``"10M"``, ``"500K"``.  When downloading
+        multiple files concurrently, this cap is shared across all files.
     progress : callable or None
         Called as ``progress(downloaded_bytes, total_bytes)`` per file.
+        Ignored in concurrent mode (*file_workers* > 1).
     expected_hash : str or None
         Expected hash in ``"algo:hexdigest"`` form.
     expected_size : int or None
@@ -218,23 +228,29 @@ def download(
         urls = _resolve_target(target)
         pairs = [(u, None) for u in urls]
 
-    # Use a plain session for downloads.  TNG file URLs already carry a
-    # ``?token=...`` query parameter, and sending an ``api-key`` header
-    # alongside the token can cause spurious 403 Forbidden responses from
-    # the data server.  Other sources that do need auth headers for
-    # downloads should pass them via a custom Session.
-    session = Session()
+    # Look up auth from the registry if the target is a source/dataset.
+    # TNG API file URLs (e.g. www.tng-project.org/api/.../files/...) require
+    # the ``api-key`` header for authentication.  The API may redirect to a
+    # data server with a ``?token=...`` query parameter; ``requests``
+    # correctly strips the ``api-key`` header on cross-origin redirects.
+    auth = _get_auth_for_target(target)
+    session = Session(auth=auth) if auth is not None else Session()
+
+    # Create one shared rate limiter so concurrent file downloads honour
+    # a single global bandwidth cap, not N independent caps.
+    shared_limiter = None
+    if rate_limit is not None:
+        from cosmo_dl.engine.rate_limiter import RateLimiter
+
+        shared_limiter = RateLimiter(rate_limit)
 
     try:
-        downloader = Downloader(session=session)
+        downloader = Downloader(session=session, rate_limiter=shared_limiter)
 
         def _path_for_pair(url: str, relpath: str | None) -> Path:
             if dest is not None and len(pairs) == 1:
                 return Path(dest)
             if relpath:
-                # download_relpath includes the sim name (e.g. "TNG100-1/output/...")
-                # Strip the leading sim name since output_dir is typically the
-                # simulation's target directory.
                 if "/" in relpath:
                     relpath = relpath.split("/", 1)[1]
                 return Path(output_dir) / relpath
@@ -242,66 +258,131 @@ def download(
             filename = parsed.path.rstrip("/").rsplit("/", 1)[-1] or "download"
             return Path(output_dir) / filename
 
-        results: list[DownloadResult] = []
-        n_failed = 0
-        last_speed = ""
-        url_iter = _tqdm(pairs, desc="Files", unit="file", disable=len(pairs) <= 1)
+        # Pre-compute all local destinations
+        url_dests: list[tuple[str, str | None, Path]] = []
+        for url, relpath in pairs:
+            url_dests.append((url, relpath, _path_for_pair(url, relpath)))
 
-        # Real-time speed tracking for the progress bar postfix
-        _speed_t0 = time.monotonic()
-        _speed_last_bytes = 0
+        # Auto-adjust per-file workers when using file-level concurrency.
+        # File-level parallelism is more efficient for many small files;
+        # chunk-level multi-threading is only beneficial for large files.
+        if file_workers > 1 and len(url_dests) > 1:
+            per_file_workers = 1
+        else:
+            per_file_workers = workers
 
-        def _progress_cb(downloaded: int, _total: int) -> None:
-            """Update the tqdm postfix with real-time download speed."""
-            nonlocal _speed_t0, _speed_last_bytes
-            now = time.monotonic()
-            elapsed = now - _speed_t0
-            if elapsed >= 0.5:
-                speed = (downloaded - _speed_last_bytes) / elapsed if elapsed > 0 else 0
-                speed_str = _fmt_speed(speed)
-                url_iter.set_postfix_str(f"{_current_fname[:20]} {speed_str}")
-                _speed_t0 = now
-                _speed_last_bytes = downloaded
+        # --- Sequential path (single file or file_workers=1) ---------------
+        if file_workers <= 1 or len(url_dests) <= 1:
+            results: list[DownloadResult] = []
+            last_speed = ""
+            url_iter = _tqdm(
+                url_dests, desc="Files", unit="file", disable=len(url_dests) <= 1,
+            )
 
-        _current_fname = ""
-
-        for url, relpath in url_iter:
-            # TNG file downloads work over HTTP (HTTPS returns 403).
-            # Keep URLs as-is — do NOT normalize to HTTPS.
-            local_dest = _path_for_pair(url, relpath)
-            fname = local_dest.name
-            _current_fname = fname
-
-            # Show last file's final speed, or just the filename for the first
-            postfix = f"{fname[:25]} {last_speed}" if last_speed else fname[:30]
-            url_iter.set_postfix_str(postfix)
-
-            # Reset speed tracker for this file
             _speed_t0 = time.monotonic()
             _speed_last_bytes = 0
 
-            result = downloader.download(
-                url,
-                local_dest,
-                resume=resume,
-                workers=workers,
-                chunk_size=chunk_size,
-                rate_limit=rate_limit,
-                progress=_progress_cb if progress is None else progress,  # type: ignore[arg-type]
-                expected_hash=expected_hash,
-                expected_size=expected_size,
-            )
+            def _progress_cb(downloaded: int, _total: int) -> None:
+                nonlocal _speed_t0, _speed_last_bytes
+                now = time.monotonic()
+                elapsed = now - _speed_t0
+                if elapsed >= 0.5:
+                    speed = ((downloaded - _speed_last_bytes) / elapsed
+                             if elapsed > 0 else 0)
+                    speed_str = _fmt_speed(speed)
+                    url_iter.set_postfix_str(f"{_current_fname[:20]} {speed_str}")
+                    _speed_t0 = now
+                    _speed_last_bytes = downloaded
 
-            if not result.success:
-                n_failed += 1
-                _tqdm.write(f"  FAIL  {local_dest}\n        {result.message}")
-            else:
-                speed_mb = result.speed / (1024 * 1024) if result.speed else 0
-                last_speed = f"{speed_mb:.1f}MB/s" if speed_mb > 0 else ""
-                # Show final speed for this file
-                if last_speed:
-                    url_iter.set_postfix_str(f"{fname[:20]} {last_speed}")
-            results.append(result)
+            _current_fname = ""
+
+            for url, relpath, local_dest in url_iter:
+                fname = local_dest.name
+                _current_fname = fname
+
+                postfix = f"{fname[:25]} {last_speed}" if last_speed else fname[:30]
+                url_iter.set_postfix_str(postfix)
+
+                _speed_t0 = time.monotonic()
+                _speed_last_bytes = 0
+
+                result = downloader.download(
+                    url,
+                    local_dest,
+                    resume=resume,
+                    workers=per_file_workers,
+                    chunk_size=chunk_size,
+                    progress=_progress_cb if progress is None else progress,  # type: ignore[arg-type]
+                    expected_hash=expected_hash,
+                    expected_size=expected_size,
+                )
+
+                if not result.success:
+                    _tqdm.write(f"  FAIL  {local_dest}\n        {result.message}")
+                else:
+                    speed_mb = result.speed / (1024 * 1024) if result.speed else 0
+                    last_speed = f"{speed_mb:.1f}MB/s" if speed_mb > 0 else ""
+                    if last_speed:
+                        url_iter.set_postfix_str(f"{fname[:20]} {last_speed}")
+                results.append(result)
+
+            if len(results) == 1:
+                return results[0]
+            return results
+
+        # --- Concurrent path (file_workers > 1, multiple files) -----------
+        results: list[DownloadResult] = []
+        results_lock = threading.Lock()
+        n_failed = 0
+
+        pbar = _tqdm(total=len(url_dests), desc="Files", unit="file")
+
+        with ThreadPoolExecutor(max_workers=file_workers) as executor:
+            future_to_info: dict = {}
+            for url, relpath, local_dest in url_dests:
+                local_dest.parent.mkdir(parents=True, exist_ok=True)
+                fut = executor.submit(
+                    downloader.download,
+                    url,
+                    local_dest,
+                    resume=resume,
+                    workers=per_file_workers,
+                    chunk_size=chunk_size,
+                    progress=None,  # per-chunk callbacks disabled in concurrent mode
+                    expected_hash=expected_hash,
+                    expected_size=expected_size,
+                )
+                future_to_info[fut] = (url, local_dest)
+
+            for future in as_completed(future_to_info):
+                url, local_dest = future_to_info[future]
+                try:
+                    result = future.result()
+                except Exception as exc:
+                    result = DownloadResult(
+                        url=url, local_path=str(local_dest),
+                        size=0, elapsed=0, speed=0,
+                        success=False, message=str(exc),
+                    )
+
+                with results_lock:
+                    if not result.success:
+                        n_failed += 1
+                        _tqdm.write(f"  FAIL  {local_dest}\n        {result.message}")
+                    results.append(result)
+
+                # Update progress bar from main thread
+                speed_str = ""
+                if result.success and result.speed and result.speed > 0:
+                    speed_mb = result.speed / (1024 * 1024)
+                    speed_str = f"{speed_mb:.1f}MB/s"
+                fname = local_dest.name
+                pbar.set_postfix_str(
+                    f"{fname[:20]} {speed_str}" if speed_str else fname[:25]
+                )
+                pbar.update(1)
+
+        pbar.close()
 
         if len(results) == 1:
             return results[0]
