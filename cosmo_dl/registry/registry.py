@@ -84,6 +84,7 @@ class Registry:
             name=node.name,
             description=node.description,
             base_url=node.base_url or "",
+            auth=node.auth,
             datasets=datasets,
         )
 

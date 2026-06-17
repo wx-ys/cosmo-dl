@@ -28,13 +28,14 @@ def _get_auth_for_target(target: str) -> AuthConfig | None:
     """Look up the auth config for a source/dataset target.
 
     Returns None for raw URLs or sources without auth.
+    Uses direct tree lookup to avoid triggering legacy conversion + lazy loading.
     """
     if target.startswith(("http://", "https://")):
         return None
     source_name = target.split("/", 1)[0]
-    source = _registry.get(source_name)
-    if source is not None and source.auth is not None:
-        return source.auth  # type: ignore[return-value]
+    root = _registry._roots.get(source_name)
+    if root is not None and root.auth is not None:
+        return root.auth  # type: ignore[return-value]
     return None
 
 
