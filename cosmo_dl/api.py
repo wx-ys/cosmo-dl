@@ -215,11 +215,13 @@ def download(
             return Path(output_dir) / filename
 
         results: list[DownloadResult] = []
+        n_failed = 0
         url_iter = _tqdm(urls, desc="Files", unit="file", disable=len(urls) <= 1)
         for url in url_iter:
             local_dest = _path_for_url(url)
             fname = local_dest.name
-            url_iter.set_postfix_str(fname[:40])
+            status_str = f"{fname[:30]}" if n_failed == 0 else f"{fname[:25]} ({n_failed} fail)"
+            url_iter.set_postfix_str(status_str)
             result = downloader.download(
                 url,
                 local_dest,
@@ -231,6 +233,8 @@ def download(
                 expected_hash=expected_hash,
                 expected_size=expected_size,
             )
+            if not result.success:
+                n_failed += 1
             results.append(result)
 
         if len(results) == 1:

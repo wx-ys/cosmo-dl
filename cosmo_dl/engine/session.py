@@ -97,6 +97,7 @@ class Session:
             cookies=merged_cookies if merged_cookies else None,
             timeout=httpx.Timeout(timeout),
             transport=transport,
+            follow_redirects=True,
         )
 
     @property
