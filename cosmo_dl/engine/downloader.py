@@ -54,9 +54,11 @@ def _apply_last_modified(dest: Path, headers) -> None:
     if not lm:
         return
     try:
-        t_struct = time.strptime(lm, "%a, %d %b %Y %H:%M:%S %Z")
-        ts = time.mktime(t_struct)
-        os.utime(dest, (ts, ts))
+        import email.utils as email_utils
+        dt = email_utils.parsedate_to_datetime(lm)
+        if dt is not None:
+            ts = dt.timestamp()
+            os.utime(dest, (ts, ts))
     except Exception:
         pass
 
@@ -426,6 +428,18 @@ class Downloader:
                     )
                     if head_headers is None:
                         head_headers = probe.headers
+            except Exception:
+                pass
+
+        # Phase 4: HEAD responses may omit Last-Modified.  If we still lack
+        #          it, probe with a tiny Range GET to capture the header.
+        if head_headers is not None and not head_headers.get("Last-Modified"):
+            try:
+                with session.stream(url, headers={"Range": "bytes=0-0"}) as probe:
+                    probe.raise_for_status()
+                    lm = probe.headers.get("Last-Modified")
+                    if lm:
+                        head_headers["Last-Modified"] = lm
             except Exception:
                 pass
 
