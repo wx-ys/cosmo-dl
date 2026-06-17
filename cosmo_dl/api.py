@@ -217,6 +217,11 @@ def download(
             if dest is not None and len(pairs) == 1:
                 return Path(dest)
             if relpath:
+                # download_relpath includes the sim name (e.g. "TNG100-1/output/...")
+                # Strip the leading sim name since output_dir is typically the
+                # simulation's target directory.
+                if "/" in relpath:
+                    relpath = relpath.split("/", 1)[1]
                 return Path(output_dir) / relpath
             parsed = urlparse(url)
             filename = parsed.path.rstrip("/").rsplit("/", 1)[-1] or "download"
@@ -227,6 +232,8 @@ def download(
         last_speed = ""
         url_iter = _tqdm(pairs, desc="Files", unit="file", disable=len(pairs) <= 1)
         for url, relpath in url_iter:
+            # TNG file downloads work over HTTP (HTTPS returns 403).
+            # Keep URLs as-is — do NOT normalize to HTTPS.
             local_dest = _path_for_pair(url, relpath)
             fname = local_dest.name
             postfix = f"{fname[:25]} {last_speed}" if last_speed else fname[:30]

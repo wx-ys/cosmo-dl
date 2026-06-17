@@ -158,7 +158,7 @@ def _make_client() -> httpx.Client | None:
         return None
     client = httpx.Client(timeout=httpx.Timeout(30), follow_redirects=True)
     if auth.type == "api-key" and auth.token:
-        client.headers["api-key"] = auth.token
+        client.headers["API-Key"] = auth.token
     if auth.custom_headers:
         client.headers.update(auth.custom_headers)
     return client

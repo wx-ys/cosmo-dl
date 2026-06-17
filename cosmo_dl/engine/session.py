@@ -59,7 +59,7 @@ class Session:
             elif auth.type == "bearer" and auth.token is not None:
                 extra_headers["authorization"] = f"Bearer {auth.token}"
             elif auth.type == "api-key" and auth.token is not None:
-                extra_headers["api-key"] = auth.token
+                extra_headers["API-Key"] = auth.token
             elif auth.type == "cookie" and auth.cookie_file is not None:
                 cj = http.cookiejar.MozillaCookieJar()
                 try:
