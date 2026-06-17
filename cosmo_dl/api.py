@@ -199,7 +199,12 @@ def download(
         A single result when downloading one URL; a list when downloading
         multiple URLs.
     """
-    urls = _resolve_target(target)
+    # Use resolve_with_relpath to get URL + download_relpath pairs
+    pairs = _resolve_target_with_paths(target)
+    # Fall back to plain URL resolution for backward compat
+    if not pairs:
+        urls = _resolve_target(target)
+        pairs = [(u, None) for u in urls]
 
     # Look up auth from the registry if the target is a source/dataset
     auth = _get_auth_for_target(target)
@@ -208,21 +213,25 @@ def download(
     try:
         downloader = Downloader(session=session)
 
-        def _path_for_url(url: str) -> Path:
-            if dest is not None and len(urls) == 1:
+        def _path_for_pair(url: str, relpath: str | None) -> Path:
+            if dest is not None and len(pairs) == 1:
                 return Path(dest)
+            if relpath:
+                return Path(output_dir) / relpath
             parsed = urlparse(url)
             filename = parsed.path.rstrip("/").rsplit("/", 1)[-1] or "download"
             return Path(output_dir) / filename
 
         results: list[DownloadResult] = []
         n_failed = 0
-        url_iter = _tqdm(urls, desc="Files", unit="file", disable=len(urls) <= 1)
-        for url in url_iter:
-            local_dest = _path_for_url(url)
+        last_speed = ""
+        url_iter = _tqdm(pairs, desc="Files", unit="file", disable=len(pairs) <= 1)
+        for url, relpath in url_iter:
+            local_dest = _path_for_pair(url, relpath)
             fname = local_dest.name
-            status_str = f"{fname[:30]}" if n_failed == 0 else f"{fname[:25]} ({n_failed} fail)"
-            url_iter.set_postfix_str(status_str)
+            postfix = f"{fname[:25]} {last_speed}" if last_speed else fname[:30]
+            url_iter.set_postfix_str(postfix)
+
             result = downloader.download(
                 url,
                 local_dest,
@@ -234,8 +243,13 @@ def download(
                 expected_hash=expected_hash,
                 expected_size=expected_size,
             )
+
             if not result.success:
                 n_failed += 1
+                _tqdm.write(f"  FAIL  {local_dest}\n        {result.message}")
+            elif result.speed and result.speed > 0:
+                speed_mb = result.speed / (1024 * 1024)
+                last_speed = f"{speed_mb:.1f}MB/s"
             results.append(result)
 
         if len(results) == 1:
