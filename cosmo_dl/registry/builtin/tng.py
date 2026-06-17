@@ -4,7 +4,7 @@ Levels::
 
     TNG/                            root group
       TNG50/                        sub-group (by box size / project)
-        TNG50-1/                    simulation (main) + data categories
+        TNG50-1/                    simulation + data categories
           snapshots/                → snapshot listing
             sn-0/                   → individual snapshot
               snapshot/             → snapshot file chunks (→ output/snapdir_NNN/)
@@ -17,7 +17,7 @@ Levels::
             offsets/                → offsets data
           files/                    → catalogs & postprocessing files
           subboxes/                 → child subbox simulations
-          TNG50-1-Dark/             → dark matter variant (peer)
+        TNG50-1-Dark/               → dark matter variant (sibling)
         TNG50-2/                    → 8× fewer particles (2× lower res.)
       TNG100/
       TNG300/
@@ -26,6 +26,7 @@ Levels::
 
 Resolution levels: -1 = highest, -2 = 8× fewer particles, -3 = 64× fewer, etc.
 Only ics.hdf5 & simulation.hdf5 go to output/; all other single files → postprocessing/.
+Dark variants are independent simulations, shown as siblings at sub-group level.
 
 Each level is loaded lazily with a single API call to the TNG REST API.
 In offline mode a built-in fallback list is used.
@@ -164,7 +165,7 @@ def _make_client() -> httpx.Client | None:
     auth = _make_auth()
     if auth is None:
         return None
-    client = httpx.Client(timeout=httpx.Timeout(30))
+    client = httpx.Client(timeout=httpx.Timeout(30), follow_redirects=True)
     if auth.type == "api-key" and auth.token:
         client.headers["api-key"] = auth.token
     if auth.custom_headers:
@@ -333,10 +334,16 @@ def _fetch_snapshots(sim_name: str) -> list[dict]:
         client.close()
 
 
-def _fetch_file_list(url: str) -> list[str]:
-    """Fetch list of file URLs from a TNG API directory endpoint.
+def _fetch_file_list(url: str) -> list[tuple[str, bool]]:
+    """Fetch list of (URL, is_dir) entries from a TNG API directory endpoint.
 
-    E.g. ``files/groupcat-99/`` → ``{"files": ["...0.hdf5", ...]}``
+    Handles two TNG API response formats:
+
+    1. ``{"files": ["...url1.hdf5", "...url2/", ...]}``
+    2. ``["...url1/", "...url2/", ...]``  (flat list of subdirectory URLs)
+
+    Returns a list of ``(url, is_dir)`` pairs, where *is_dir* is ``True``
+    when the URL ends with ``/`` (a subdirectory needing further exploration).
     """
     if _is_offline():
         return []
@@ -349,15 +356,24 @@ def _fetch_file_list(url: str) -> list[str]:
         resp = client.get(url)
         resp.raise_for_status()
         data = resp.json()
-    except Exception:
+    except Exception as exc:
+        logger.debug("Failed to fetch file list from %s: %s", url, exc)
         return []
     finally:
         client.close()
 
-    files = data.get("files", [])
-    if isinstance(files, list):
-        return [f for f in files if isinstance(f, str)]
-    return []
+    entries: list[str] = []
+
+    if isinstance(data, dict):
+        # Format 1: {"files": ["url1", "url2", ...]}
+        files = data.get("files", [])
+        if isinstance(files, list):
+            entries = [f for f in files if isinstance(f, str)]
+    elif isinstance(data, list):
+        # Format 2: ["url1/", "url2/", ...]
+        entries = [e for e in data if isinstance(e, str)]
+
+    return [(u, u.endswith("/")) for u in entries]
 
 
 # ---------------------------------------------------------------------------
@@ -377,9 +393,9 @@ def _build_snapshot_file_children(
 
     # --- snapshot files ---
     snap_url = f"{TNG_API_BASE}{sim_name}/files/snapshot-{snap_num}/"
-    snap_files = _fetch_file_list(snap_url)
+    snap_entries = _fetch_file_list(snap_url)
     snap_kids: dict[str, SourceNode] = {}
-    for f_url in snap_files:
+    for f_url, _is_dir in snap_entries:
         fname = f_url.rstrip("/").rsplit("/", 1)[-1]
         snap_kids[fname] = SourceNode(
             name=fname,
@@ -393,18 +409,18 @@ def _build_snapshot_file_children(
     children["snapshot"] = SourceNode(
         name="snapshot",
         path=f"{path_prefix}/snapshot",
-        description=f"Snapshot {snap_num} files ({len(snap_files)} chunks)",
+        description=f"Snapshot {snap_num} files ({len(snap_entries)} chunks)",
         node_type="category",
-        child_count=len(snap_files),
+        child_count=len(snap_entries),
         children=snap_kids,
         download_relpath=f"{sim_name}/output/snapdir_{nnn}/",
     )
 
     # --- groupcat files ---
     gc_url = f"{TNG_API_BASE}{sim_name}/files/groupcat-{snap_num}/"
-    gc_files = _fetch_file_list(gc_url)
+    gc_entries = _fetch_file_list(gc_url)
     gc_kids: dict[str, SourceNode] = {}
-    for f_url in gc_files:
+    for f_url, _is_dir in gc_entries:
         fname = f_url.rstrip("/").rsplit("/", 1)[-1]
         gc_kids[fname] = SourceNode(
             name=fname,
@@ -418,9 +434,9 @@ def _build_snapshot_file_children(
     children["groupcat"] = SourceNode(
         name="groupcat",
         path=f"{path_prefix}/groupcat",
-        description=f"Group catalog {snap_num} files ({len(gc_files)} chunks)",
+        description=f"Group catalog {snap_num} files ({len(gc_entries)} chunks)",
         node_type="category",
-        child_count=len(gc_files),
+        child_count=len(gc_entries),
         children=gc_kids,
         download_relpath=f"{sim_name}/output/groups_{nnn}/",
     )
@@ -467,22 +483,50 @@ def _build_snapshots_children(sim_name: str) -> dict[str, SourceNode]:
 def _build_file_list_children(
     list_url: str, sim_name: str, relpath_prefix: str,
 ) -> dict[str, SourceNode]:
-    """Build dataset children from a file listing URL."""
-    files = _fetch_file_list(list_url)
+    """Build children from a TNG API file/directory listing.
+
+    Handles both plain file URLs (→ dataset nodes) and subdirectory URLs
+    (→ category nodes with lazy loaders for further exploration).
+    """
+    entries = _fetch_file_list(list_url)
     children: dict[str, SourceNode] = {}
-    for f_url in files:
-        fname = f_url.rstrip("/").rsplit("/", 1)[-1]
-        # Build a reasonable path — use the sim name + relpath
-        safe_path = f"TNG/{_sub_group(sim_name)}/{sim_name}/{relpath_prefix.rstrip('/')}/{fname}"
-        children[fname] = SourceNode(
-            name=fname,
-            path=safe_path,
-            description="",
-            node_type="dataset",
-            url=f_url,
-            children={},
-            download_relpath=f"{relpath_prefix}{fname}",
-        )
+    sub_group = _sub_group(sim_name)
+
+    for entry_url, is_dir in entries:
+        if is_dir:
+            # Subdirectory → create a lazy-loaded category node
+            dir_name = entry_url.rstrip("/").rsplit("/", 1)[-1]
+            safe_path = f"TNG/{sub_group}/{relpath_prefix.rstrip('/')}/{dir_name}"
+            sub_relpath = f"{relpath_prefix}{dir_name}/"
+
+            def _make_dir_loader(u: str = entry_url, sn: str = sim_name, rp: str = sub_relpath):
+                def _load() -> dict[str, SourceNode]:
+                    return _build_file_list_children(u, sn, rp)
+                return _load
+
+            children[dir_name] = SourceNode(
+                name=dir_name,
+                path=safe_path,
+                description=f"{dir_name} files",
+                node_type="category",
+                child_count=0,
+                _loader=_make_dir_loader(),
+                download_relpath=sub_relpath,
+            )
+        else:
+            # Plain file → dataset node
+            fname = entry_url.rstrip("/").rsplit("/", 1)[-1]
+            safe_path = f"TNG/{sub_group}/{relpath_prefix.rstrip('/')}/{fname}"
+            children[fname] = SourceNode(
+                name=fname,
+                path=safe_path,
+                description="",
+                node_type="dataset",
+                url=entry_url,
+                children={},
+                download_relpath=f"{relpath_prefix}{fname}",
+            )
+
     return children
 
 
@@ -751,21 +795,6 @@ def _build_simulation_children(
             auth=auth,
         )
 
-    # -- Dark variant (peer simulation, if not already a subbox/dark) --
-    # Only the main simulation gets dark peers; subboxes and dark variants don't.
-    if not is_subbox and not sim_name.endswith("-Dark"):
-        dark_name = f"{sim_name}-Dark"
-        # Check if this dark variant exists (in API or fallback)
-        dark_exists = False
-        for fn, fd, fs, fb in _FALLBACK_SIMULATIONS:
-            if fn == dark_name and fb == False:
-                dark_exists = True
-                break
-        if dark_exists or True:  # Always add — it will be lazily loaded
-            children[dark_name] = _build_simulation_node(
-                dark_name, auth, is_subbox=False,
-            )
-
     return children
 
 
@@ -787,12 +816,10 @@ def _build_simulation_node(
         child_urls = []
     files = detail.get("files", {})
 
-    # Count non-file children: snapshots + postprocessing + files + subboxes + dark
-    child_count = 4  # snapshots, postprocessing, files, subboxes (or fewer if none)
+    # Count children: snapshots + postprocessing + files + subboxes (if any)
+    child_count = 4  # snapshots, postprocessing, files, subboxes
     if not child_urls:
-        child_count -= 1
-    if not is_subbox and not sim_name.endswith("-Dark"):
-        child_count += 1  # Dark variant
+        child_count -= 1  # no subboxes
 
     meta: dict[str, object] = {
         "boxsize": box,
@@ -831,38 +858,20 @@ def _build_subgroup_children(
     sims: list[tuple[str, str, int, bool]],
     auth: AuthConfig | None,
 ) -> dict[str, SourceNode]:
-    """Build children for a sub-group node: simulation families (non-subbox sims)."""
-    # Group sims by family name (for dark variants under main sim)
-    families: dict[str, list[tuple[str, str, int, bool]]] = defaultdict(list)
-    for name, desc, nsnap, is_sub in sims:
-        families[_family_name(name)].append((name, desc, nsnap, is_sub))
+    """Build children for a sub-group node: simulation families (non-subbox sims).
 
+    Main simulations and their Dark variants are all siblings at this level.
+    """
     children: dict[str, SourceNode] = {}
-    for family, family_sims in sorted(families.items()):
-        # Find the main simulation (non-dark, non-subbox)
-        main_sim = None
-        for name, desc, nsnap, is_sub in family_sims:
-            if not is_sub and not name.endswith("-Dark"):
-                main_sim = (name, desc, nsnap, is_sub)
-                break
-
-        if main_sim is None:
-            # Fallback: use first non-subbox
-            for name, desc, nsnap, is_sub in family_sims:
-                if not is_sub:
-                    main_sim = (name, desc, nsnap, is_sub)
-                    break
-
-        if main_sim is None:
-            continue
-
-        name, desc, nsnap, is_sub = main_sim
+    for name, desc, nsnap, is_sub in sims:
+        if is_sub:
+            continue  # Subboxes are nested under their parent sim
         children[name] = _build_simulation_node(name, auth)
 
     return children
 
 
-def _describe_sub_group(name: str, count: int) -> str:
+def _describe_sub_group(name: str, n_levels: int, n_total: int) -> str:
     """Human-readable description for a TNG sub-group."""
     descriptions = {
         "TNG50": "TNG 50 Mpc/h box",
@@ -872,7 +881,11 @@ def _describe_sub_group(name: str, count: int) -> str:
         "Illustris": "Original Illustris 75 Mpc/h box",
     }
     base = descriptions.get(name, name)
-    return f"{base} — {count} resolution level(s)"
+    dark_count = n_total - n_levels
+    parts = [f"{n_levels} resolution level(s)"]
+    if dark_count > 0:
+        parts.append(f"{dark_count} dark variant(s)")
+    return f"{base} — {', '.join(parts)}"
 
 
 def _build_tng_children(auth: AuthConfig | None) -> dict[str, SourceNode]:
@@ -886,17 +899,17 @@ def _build_tng_children(auth: AuthConfig | None) -> dict[str, SourceNode]:
 
     children: dict[str, SourceNode] = {}
     for group_name, group_sims in sorted(groups.items()):
-        # Count non-subbox sims for the top-level count
-        top_level = [(n, d, s, b) for n, d, s, b in group_sims if not b]
-        # Count unique families
+        # Count non-subbox sims (main + dark variants)
+        top_level = [s for s in group_sims if not s[3]]
+        # Count unique resolution levels (families)
         family_set = {_family_name(n) for n, d, s, b in top_level}
-        group_desc = _describe_sub_group(group_name, len(family_set))
+        group_desc = _describe_sub_group(group_name, len(family_set), len(top_level))
         children[group_name] = SourceNode(
             name=group_name,
             path=f"TNG/{group_name}",
             description=group_desc,
             node_type="group",
-            child_count=len(family_set),
+            child_count=len(top_level),
             _loader=lambda g=group_sims, a=auth: _build_subgroup_children(g, a),
             auth=auth,
         )

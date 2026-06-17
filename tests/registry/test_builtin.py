@@ -147,16 +147,17 @@ def test_tng_no_subbox_at_subgroup_level():
         )
 
 
-def test_tng_dark_variant_is_child():
-    """Dark variants should appear as children of the main simulation."""
+def test_tng_dark_variant_is_sibling():
+    """Dark variants should appear as siblings at the sub-group level."""
     from cosmo_dl.registry.builtin import get_builtin_roots
     roots = {r.name: r for r in get_builtin_roots()}
     tng = roots["TNG"]
     tng50 = tng.get_child("TNG50")
-    tng50_1 = tng50.get_child("TNG50-1")
-    children = tng50_1.list_children()
-    assert "TNG50-1-Dark" in children
-    dark = children["TNG50-1-Dark"]
+    siblings = tng50.list_children()
+    # Dark variant is a sibling, not a child of the main simulation
+    assert "TNG50-1-Dark" in siblings
+    assert "TNG50-1" in siblings
+    dark = siblings["TNG50-1-Dark"]
     assert dark.node_type == "simulation"
 
 
@@ -166,8 +167,7 @@ def test_tng_dark_variant_has_own_data():
     roots = {r.name: r for r in get_builtin_roots()}
     tng = roots["TNG"]
     tng50 = tng.get_child("TNG50")
-    tng50_1 = tng50.get_child("TNG50-1")
-    dark = tng50_1.get_child("TNG50-1-Dark")
+    dark = tng50.get_child("TNG50-1-Dark")
     assert dark is not None
     dark_children = dark.list_children()
     assert "snapshots" in dark_children
