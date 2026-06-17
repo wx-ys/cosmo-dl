@@ -218,9 +218,12 @@ def download(
         urls = _resolve_target(target)
         pairs = [(u, None) for u in urls]
 
-    # Look up auth from the registry if the target is a source/dataset
-    auth = _get_auth_for_target(target)
-    session = Session(auth=auth) if auth is not None else None
+    # Use a plain session for downloads.  TNG file URLs already carry a
+    # ``?token=...`` query parameter, and sending an ``api-key`` header
+    # alongside the token can cause spurious 403 Forbidden responses from
+    # the data server.  Other sources that do need auth headers for
+    # downloads should pass them via a custom Session.
+    session = Session()
 
     try:
         downloader = Downloader(session=session)
