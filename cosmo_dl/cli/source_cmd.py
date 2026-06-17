@@ -78,7 +78,7 @@ def source_list(path: str) -> None:
             click.echo(f"\n  (no children)")
         return
 
-    items = sorted(children.items())
+    items = list(children.items())
     for child_name, child in items:
         if child.node_type == "dataset":
             # Dataset: show URL and optional download path
@@ -126,7 +126,7 @@ def source_info(path: str) -> None:
     children = node.list_children()
     if children:
         click.echo(f"Children:    {len(children)}")
-        items = sorted(children.items())
+        items = list(children.items())
         for child_name, child in items[:30]:
             click.echo(f"  - {child_name}  ({child.node_type})")
         if len(items) > 30:

@@ -25,7 +25,8 @@ Levels::
       Illustris/
 
 Resolution levels: -1 = highest, -2 = 8× fewer particles, -3 = 64× fewer, etc.
-Only ics.hdf5 & simulation.hdf5 go to output/; all other single files → postprocessing/.
+Download paths: ics → output/snap_ics.hdf5, simulation → simulation.hdf5 (root),
+snapshot/groupcat → output/snapdir|groups_NNN/, all other files → postprocessing/.
 Dark variants are independent simulations, shown as siblings at sub-group level.
 
 Each level is loaded lazily with a single API call to the TNG REST API.
@@ -53,42 +54,36 @@ TNG_GROUP = "TNG"
 # Fallback simulation list
 # ---------------------------------------------------------------------------
 
-_RESOLUTION_DESC = {
-    1: "highest resolution",
-    2: "8× fewer particles (2× lower resolution)",
-    3: "64× fewer particles (4× lower resolution)",
-    4: "512× fewer particles (8× lower resolution)",
-}
 
 _FALLBACK_SIMULATIONS: list[tuple[str, str, int, bool]] = [
     # (name, description, num_snapshots, is_subbox)
-    ("TNG50-1",           "TNG 50 Mpc/h, full physics, highest resolution",       100, False),
-    ("TNG50-1-Dark",      "TNG 50 Mpc/h, dark matter only, highest resolution",   100, False),
-    ("TNG50-2",           "TNG 50 Mpc/h, full physics, 8× fewer particles (2× lower res.)", 100, False),
-    ("TNG50-2-Dark",      "TNG 50 Mpc/h, dark matter only, 8× fewer particles (2× lower res.)", 100, False),
-    ("TNG50-3",           "TNG 50 Mpc/h, full physics, 64× fewer particles (4× lower res.)", 100, False),
-    ("TNG50-3-Dark",      "TNG 50 Mpc/h, dark matter only, 64× fewer particles (4× lower res.)", 100, False),
-    ("TNG50-4",           "TNG 50 Mpc/h, full physics, 512× fewer particles (8× lower res.)", 100, False),
-    ("TNG50-4-Dark",      "TNG 50 Mpc/h, dark matter only, 512× fewer particles (8× lower res.)", 100, False),
-    ("TNG100-1",          "TNG 100 Mpc/h, full physics, highest resolution",      100, False),
-    ("TNG100-1-Dark",     "TNG 100 Mpc/h, dark matter only, highest resolution",  100, False),
-    ("TNG100-2",          "TNG 100 Mpc/h, full physics, 8× fewer particles (2× lower res.)", 100, False),
-    ("TNG100-2-Dark",     "TNG 100 Mpc/h, dark matter only, 8× fewer particles (2× lower res.)", 100, False),
-    ("TNG100-3",          "TNG 100 Mpc/h, full physics, 64× fewer particles (4× lower res.)", 100, False),
-    ("TNG100-3-Dark",     "TNG 100 Mpc/h, dark matter only, 64× fewer particles (4× lower res.)", 100, False),
-    ("TNG300-1",          "TNG 300 Mpc/h, full physics, highest resolution",      100, False),
-    ("TNG300-1-Dark",     "TNG 300 Mpc/h, dark matter only, highest resolution",  100, False),
-    ("TNG300-2",          "TNG 300 Mpc/h, full physics, 8× fewer particles (2× lower res.)", 100, False),
-    ("TNG300-2-Dark",     "TNG 300 Mpc/h, dark matter only, 8× fewer particles (2× lower res.)", 100, False),
-    ("TNG300-3",          "TNG 300 Mpc/h, full physics, 64× fewer particles (4× lower res.)", 100, False),
-    ("TNG300-3-Dark",     "TNG 300 Mpc/h, dark matter only, 64× fewer particles (4× lower res.)", 100, False),
-    ("TNG-Cluster",       "TNG cluster zoom, full physics, highest resolution",   100, False),
-    ("Illustris-1",       "Original Illustris 75 Mpc/h, highest resolution",      134, False),
-    ("Illustris-1-Dark",  "Original Illustris 75 Mpc/h, DM only, highest res.",   136, False),
-    ("Illustris-2",       "Original Illustris 75 Mpc/h, 8× fewer particles (2× lower res.)", 136, False),
-    ("Illustris-2-Dark",  "Original Illustris 75 Mpc/h, DM only, 8× fewer particles (2× lower res.)", 136, False),
-    ("Illustris-3",       "Original Illustris 75 Mpc/h, 64× fewer particles (4× lower res.)", 136, False),
-    ("Illustris-3-Dark",  "Original Illustris 75 Mpc/h, DM only, 64× fewer particles (4× lower res.)", 136, False),
+    ("TNG50-1",           "Main high-resolution IllustrisTNG50 run including the full TNG physics model.",       100, False),
+    ("TNG50-1-Dark",      "Main high-resolution IllustrisTNG50 run - dark matter only analog.",   100, False),
+    ("TNG50-2",           "Intermediate resolution (level 2) IllustrisTNG50 run including the full TNG physics model.", 100, False),
+    ("TNG50-2-Dark",      "Intermediate resolution (level 2) IllustrisTNG50 run - dark matter only analog.", 100, False),
+    ("TNG50-3",           "Low resolution (level 3) IllustrisTNG50 run including the full TNG physics model.", 100, False),
+    ("TNG50-3-Dark",      "Low resolution (level 3) IllustrisTNG50 run - dark matter only analog.", 100, False),
+    ("TNG50-4",           "Lowest resolution (level 4) IllustrisTNG50 run including the full TNG physics model.", 100, False),
+    ("TNG50-4-Dark",      "Lowest resolution (level 4) IllustrisTNG50 run - dark matter only analog.", 100, False),
+    ("TNG100-1",          "Main high-resolution IllustrisTNG100 run including the full TNG physics model.",      100, False),
+    ("TNG100-1-Dark",     "Main high-resolution IllustrisTNG100 run - dark matter only analog.",  100, False),
+    ("TNG100-2",          "Intermediate resolution (level 2) IllustrisTNG100 run including the full TNG physics model.", 100, False),
+    ("TNG100-2-Dark",     "Intermediate resolution (level 2) IllustrisTNG100 run - dark matter only analog.", 100, False),
+    ("TNG100-3",          "Low resolution (level 3) IllustrisTNG100 run including the full TNG physics model.", 100, False),
+    ("TNG100-3-Dark",     "Low resolution (level 3) IllustrisTNG100 run - dark matter only analog.", 100, False),
+    ("TNG300-1",          "Main high-resolution IllustrisTNG300 run including the full TNG physics model.",      100, False),
+    ("TNG300-1-Dark",     "Main high-resolution IllustrisTNG300 run - dark matter only analog.",  100, False),
+    ("TNG300-2",          "Intermediate resolution (level 2) IllustrisTNG300 run including the full TNG physics model.", 100, False),
+    ("TNG300-2-Dark",     "Intermediate resolution (level 2) IllustrisTNG300 run - dark matter only analog.", 100, False),
+    ("TNG300-3",          "Low resolution (level 3) IllustrisTNG300 run including the full TNG physics model.", 100, False),
+    ("TNG300-3-Dark",     "Low resolution (level 3) IllustrisTNG300 run - dark matter only analog.", 100, False),
+    ("TNG-Cluster",       "Main high-resolution TNG-Cluster simulation suite (virtual box), with the full fiducial TNG physics model.",   100, False),
+    ("Illustris-1",       "Main high-resolution Illustris run including the full physics model.",      134, False),
+    ("Illustris-1-Dark",  "Main high-resolution Illustris run - dark matter only analog.",   136, False),
+    ("Illustris-2",       "Intermediate resolution (level 2) Illustris run including the full physics model.", 136, False),
+    ("Illustris-2-Dark",  "Intermediate resolution (level 2) Illustris run - dark matter only analog.", 136, False),
+    ("Illustris-3",       "Low resolution (level 3) Illustris run including the full physics model.", 136, False),
+    ("Illustris-3-Dark",  "Low resolution (level 3) Illustris run - dark matter only analog.", 136, False),
     # Subboxes
     ("TNG50-1-Subbox0",   "TNG50-1 subbox 0",                         3600, True),
     ("TNG50-1-Subbox1",   "TNG50-1 subbox 1",                         3600, True),
@@ -134,13 +129,9 @@ _FALLBACK_SIMULATIONS: list[tuple[str, str, int, bool]] = [
 # Keys in the simulation detail "files" dict that are handled specially
 _SKIP_FILE_KEYS = {"lhalotree", "sublink", "offsets", "snapshots", "checksums"}
 
-# Keys whose files stay under output/ (not postprocessing/)
-_OUTPUT_FILE_KEYS = {"ics", "simulation"}
-
 # Mapping from simulation detail "files" key to local filename (under output/)
 _SINGLE_FILE_KEYS: dict[str, str] = {
     "ics": "snap_ics.hdf5",
-    "simulation": "simulation.hdf5",
 }
 
 # ---------------------------------------------------------------------------
@@ -453,7 +444,7 @@ def _build_snapshots_children(sim_name: str) -> dict[str, SourceNode]:
     for snap in snap_list:
         num = snap.get("number", 0)
         redshift = snap.get("redshift")
-        name = f"sn-{num}"
+        name = f"sn-{num:03d}"  # zero-padded for natural sort
         desc_parts = [f"Snapshot {num}"]
         if redshift is not None:
             desc_parts.append(f"z={redshift:.3f}")
@@ -625,38 +616,45 @@ def _build_postprocessing_children(
 def _build_files_children(
     sim_name: str, files: dict,
 ) -> dict[str, SourceNode]:
-    """Build files/ children: single HDF5 downloads (ics, simulation, ...)."""
+    """Build files/ children: directories first, then single files.
+
+    Output paths:
+    - ics → {sim}/output/snap_ics.hdf5
+    - simulation → {sim}/simulation.hdf5 (root level)
+    - everything else → {sim}/postprocessing/<name>
+    """
     path_prefix = f"TNG/{_sub_group(sim_name)}/{sim_name}/files"
-    children: dict[str, SourceNode] = {}
+    dirs: dict[str, SourceNode] = {}
+    hdf5_files: dict[str, SourceNode] = {}
 
     for key, url in sorted(files.items()):
         if key in _SKIP_FILE_KEYS:
             continue
         if not isinstance(url, str):
             continue
-        # Skip per-snapshot keys
         if re.match(r"^(snapshot|groupcat)-\d+$", key):
             continue
-        # Skip subbox subhalo list keys
         if re.match(r"^subbox_subhalo_list_\d+$", key):
             continue
 
+        is_hdf5 = url.rstrip("/").endswith((".hdf5", ".h5", ".HDF5"))
+
         # Determine local filename and relpath
-        if key in _SINGLE_FILE_KEYS:
-            fname = _SINGLE_FILE_KEYS[key]
+        if key == "ics":
+            fname = "snap_ics.hdf5"
             relpath = f"{sim_name}/output/{fname}"
+        elif key == "simulation":
+            fname = "simulation.hdf5"
+            relpath = f"{sim_name}/{fname}"
+        elif is_hdf5:
+            fname = url.rstrip("/").rsplit("/", 1)[-1] or key
+            relpath = f"{sim_name}/postprocessing/{fname}"
         else:
             fname = url.rstrip("/").rsplit("/", 1)[-1] or key
-            if url.rstrip("/").endswith((".hdf5", ".h5", ".HDF5")):
-                # Single HDF5 → postprocessing/
-                relpath = f"{sim_name}/postprocessing/{fname}"
-            else:
-                # Directory-like URL → postprocessing/<key>/
-                relpath = f"{sim_name}/postprocessing/{key}/"
+            relpath = f"{sim_name}/postprocessing/{key}/"
 
-        if url.rstrip("/").endswith((".hdf5", ".h5", ".HDF5")):
-            # Single file
-            children[fname] = SourceNode(
+        if is_hdf5:
+            hdf5_files[fname] = SourceNode(
                 name=fname,
                 path=f"{path_prefix}/{fname}",
                 description=key,
@@ -672,7 +670,7 @@ def _build_files_children(
                     return _build_file_list_children(u, sn, rp)
                 return _load
 
-            children[key] = SourceNode(
+            dirs[key] = SourceNode(
                 name=key,
                 path=f"{path_prefix}/{key}",
                 description=f"{key} files",
@@ -681,6 +679,19 @@ def _build_files_children(
                 _loader=_make_loader(),
                 download_relpath=relpath,
             )
+
+    # Assemble: directories first (sorted), then files (snap_ics.hdf5 first, then alpha)
+    children: dict[str, SourceNode] = {}
+    children.update(dirs)
+
+    # Extract snap_ics.hdf5 and simulation.hdf5 to place first
+    special_order = ["snap_ics.hdf5", "simulation.hdf5"]
+    for sp in special_order:
+        if sp in hdf5_files:
+            children[sp] = hdf5_files.pop(sp)
+    # Remaining files in sorted order
+    for fname in sorted(hdf5_files):
+        children[fname] = hdf5_files[fname]
 
     return children
 
@@ -772,7 +783,7 @@ def _build_simulation_children(
     children["files"] = SourceNode(
         name="files",
         path=f"{path_prefix}/files",
-        description=f"{n_files} catalog(s) & postprocessing file(s)",
+        description=f"{n_files} file(s) & catalog(s)",
         node_type="group",
         child_count=n_files,
         _loader=_load_files,
