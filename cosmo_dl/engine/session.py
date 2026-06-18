@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import http.cookiejar
+import logging
+import time
 from typing import Any, ContextManager
 from urllib.parse import urlparse
 
@@ -10,6 +12,8 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 from cosmo_dl.engine.types import AuthConfig
+
+logger = logging.getLogger(__name__)
 
 
 class _CrossOriginSession(requests.Session):
@@ -117,6 +121,7 @@ class Session:
         self.retry_backoff = retry_backoff
         self._timeout = (timeout, read_timeout)
         self._closed = False
+        self._oauth2_auth: AuthConfig | None = None
 
         # Build extra headers from auth config
         extra_headers: dict[str, str] = {}
@@ -144,6 +149,15 @@ class Session:
                 except FileNotFoundError:
                     pass
                 extra_cookies = cj
+
+            elif auth.type == "oauth2":
+                # Load stored tokens and apply as Bearer
+                self._oauth2_auth = auth
+                self._load_oauth2_tokens()
+                if auth.access_token:
+                    extra_headers["Authorization"] = f"Bearer {auth.access_token}"
+            else:
+                self._oauth2_auth = None
 
         # Merge user-supplied headers with extra auth headers
         merged_headers: dict[str, str] = {}
@@ -201,11 +215,13 @@ class Session:
 
     def head(self, url: str, **kwargs: Any) -> requests.Response:
         """Send a HEAD request."""
+        self._ensure_fresh_token()
         kwargs.setdefault('timeout', self._timeout)
         return self._client.head(url, **kwargs)
 
     def get(self, url: str, **kwargs: Any) -> requests.Response:
         """Send a GET request."""
+        self._ensure_fresh_token()
         kwargs.setdefault('timeout', self._timeout)
         return self._client.get(url, **kwargs)
 
@@ -216,11 +232,114 @@ class Session:
         provides ``headers``, ``status_code``, ``raise_for_status()``, and
         ``iter_bytes(chunk_size)`` — compatible with the old httpx-based API.
         """
+        self._ensure_fresh_token()
         kwargs.setdefault('timeout', self._timeout)
         # Pop any 'method' kwarg (httpx compatibility)
         kwargs.pop('method', None)
         resp = self._client.get(url, stream=True, **kwargs)
         return StreamResponse(resp)
+
+    # ------------------------------------------------------------------
+    # OAuth2 token management
+    # ------------------------------------------------------------------
+
+    def _load_oauth2_tokens(self) -> None:
+        """Load stored OAuth2 tokens for the configured source."""
+        auth = self._oauth2_auth
+        if auth is None or auth.source_name is None:
+            return
+        try:
+            from cosmo_dl.config import get_token
+            stored = get_token(auth.source_name)
+            if stored:
+                auth.refresh_token = str(stored.get("refresh_token", "")) or None
+                auth.access_token = str(stored.get("access_token", "")) or None
+                expiry = stored.get("token_expiry")
+                auth.token_expiry = float(expiry) if expiry is not None else None
+        except Exception as exc:
+            logger.debug("Failed to load OAuth2 tokens: %s", exc)
+
+    def _persist_oauth2_tokens(self) -> None:
+        """Save current OAuth2 tokens to persistent storage."""
+        auth = self._oauth2_auth
+        if auth is None or auth.source_name is None:
+            return
+        try:
+            from cosmo_dl.config import save_token
+            save_token(auth.source_name, {
+                "refresh_token": auth.refresh_token,
+                "access_token": auth.access_token,
+                "token_expiry": auth.token_expiry,
+            })
+        except Exception as exc:
+            logger.debug("Failed to persist OAuth2 tokens: %s", exc)
+
+    def _refresh_oauth2_token(self) -> bool:
+        """Refresh the OAuth2 access token using the stored refresh token.
+
+        Returns ``True`` if a fresh token was obtained.
+        """
+        auth = self._oauth2_auth
+        if auth is None:
+            return False
+        if not auth.refresh_token or not auth.token_url:
+            logger.warning("OAuth2: missing refresh_token or token_url, cannot refresh")
+            return False
+
+        payload: dict[str, str] = {
+            "grant_type": "refresh_token",
+            "refresh_token": auth.refresh_token,
+        }
+        if auth.client_id:
+            payload["client_id"] = auth.client_id
+        if auth.client_secret:
+            payload["client_secret"] = auth.client_secret
+        if auth.scopes:
+            payload["scope"] = auth.scopes
+
+        try:
+            resp = requests.post(
+                auth.token_url,
+                data=payload,
+                timeout=(10, 30),
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        except Exception as exc:
+            logger.warning("OAuth2 token refresh failed: %s", exc)
+            return False
+
+        new_access = data.get("access_token")
+        if not new_access:
+            logger.warning("OAuth2: no access_token in refresh response")
+            return False
+
+        auth.access_token = new_access
+        expires_in = data.get("expires_in")
+        if isinstance(expires_in, (int, float)) and expires_in > 0:
+            auth.token_expiry = time.time() + float(expires_in)
+        else:
+            auth.token_expiry = None
+
+        # Update session header
+        self._client.headers["Authorization"] = f"Bearer {auth.access_token}"
+
+        # Persist updated tokens
+        self._persist_oauth2_tokens()
+        logger.info("OAuth2 token refreshed successfully")
+        return True
+
+    def _ensure_fresh_token(self) -> None:
+        """Check if the OAuth2 access token is expired and refresh if needed."""
+        auth = self._oauth2_auth
+        if auth is None or auth.access_token is None:
+            return
+        if auth.token_expiry is not None and time.time() >= auth.token_expiry - 60:
+            self._refresh_oauth2_token()
+
+    # ------------------------------------------------------------------
+    # HTTP methods (with OAuth2 auto-refresh)
+    # ------------------------------------------------------------------
 
     def close(self) -> None:
         """Close the underlying HTTP client."""

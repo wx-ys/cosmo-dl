@@ -9,6 +9,7 @@ Reads settings from multiple sources with this priority (highest first):
 """
 from __future__ import annotations
 
+import json
 import os
 import re
 from pathlib import Path
@@ -191,3 +192,63 @@ def show() -> dict[str, str]:
 def list_keys() -> list[str]:
     """Return known config key names."""
     return sorted(_ENV_KEY_MAP.keys())
+
+
+# ---------------------------------------------------------------------------
+# OAuth2 token storage
+# ---------------------------------------------------------------------------
+
+_TOKEN_FILE = CONFIG_DIR / "tokens.json"
+
+
+def _get_tokens_path() -> Path:
+    return _TOKEN_FILE
+
+
+def load_tokens() -> dict[str, object]:
+    """Load all OAuth2 tokens from the tokens file.
+
+    Returns an empty dict when the file does not exist or is corrupt.
+    """
+    if not _TOKEN_FILE.is_file():
+        return {}
+    try:
+        with open(_TOKEN_FILE, "r") as f:
+            data = json.load(f)
+    except Exception:
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return data  # type: ignore[no-any-return]
+
+
+def save_tokens(tokens: dict[str, object]) -> None:
+    """Persist OAuth2 tokens with restricted file permissions (0600)."""
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    with open(_TOKEN_FILE, "w") as f:
+        json.dump(tokens, f, indent=2)
+    os.chmod(_TOKEN_FILE, 0o600)
+
+
+def get_token(source_name: str) -> dict[str, object] | None:
+    """Return the OAuth2 token dict for *source_name*, or ``None``."""
+    tokens = load_tokens()
+    entry = tokens.get(source_name)
+    if isinstance(entry, dict):
+        return entry  # type: ignore[return-value]
+    return None
+
+
+def save_token(source_name: str, token_data: dict[str, object]) -> None:
+    """Persist OAuth2 tokens for *source_name*."""
+    tokens = load_tokens()
+    tokens[source_name] = token_data
+    save_tokens(tokens)
+
+
+def remove_token(source_name: str) -> None:
+    """Remove stored OAuth2 tokens for *source_name*."""
+    tokens = load_tokens()
+    if source_name in tokens:
+        del tokens[source_name]
+        save_tokens(tokens)

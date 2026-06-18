@@ -43,6 +43,14 @@ def load_sources_from_yaml(path: str) -> list[SimulationSource]:
                 token=auth_cfg.get("token"),
                 cookie_file=auth_cfg.get("cookie_file"),
                 custom_headers=auth_cfg.get("custom_headers", {}),
+                # OAuth2 fields
+                client_id=auth_cfg.get("client_id"),
+                client_secret=auth_cfg.get("client_secret"),
+                token_url=auth_cfg.get("token_url"),
+                authorize_url=auth_cfg.get("authorize_url"),
+                scopes=auth_cfg.get("scopes"),
+                redirect_uri=auth_cfg.get("redirect_uri"),
+                source_name=auth_cfg.get("source_name", name),
             )
 
         # -- datasets --

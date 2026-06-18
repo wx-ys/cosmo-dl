@@ -1,18 +1,37 @@
-"""Auriga simulation data source."""
-from cosmo_dl.registry.source import SimulationSource, DatasetInfo
+"""Auriga simulation data source — informational entry.
 
-_AURIGA_HALOS = {}
-for _n in range(1, 31):
-    _AURIGA_HALOS[f"halo-{_n}"] = DatasetInfo(
-        path=f"halo_{_n}/",
-        description=f"Auriga Halo {_n}, level 4, snapshot 127",
-    )
+The Auriga data is hosted on Globus and requires browser-based login.
+cosmo-dl does not currently support automated Globus authentication.
+Use the links below to browse and download data manually.
+"""
+from __future__ import annotations
 
-AURIGA_SOURCE = SimulationSource(
-    name="Auriga",
-    description="Auriga simulation, halos 1-30, level 4",
-    base_url="https://g-5a93c7.140599.5898.data.globus.org/level4/Original/",
-    structure="pattern",
-    group="Auriga",
-    datasets=_AURIGA_HALOS,
+from cosmo_dl.registry.source import SourceNode
+
+_AURIGA_DESCRIPTION = (
+    "The Auriga simulations are a set of cosmological zoom simulations "
+    "performed with the magneto-hydrodynamics code AREPO.\n"
+    "Data page: https://wwwmpa.mpa-garching.mpg.de/auriga/data.html\n"
+    "Download:  https://app.globus.org/file-manager"
+    "?origin_id=02a2dbb8-f64d-4440-bafe-44b60b964501"
 )
+
+
+def build_auriga_root() -> SourceNode:
+    """Return the Auriga root ``SourceNode`` (informational only).
+
+    Auriga data requires Globus browser-based login.  Visit the data
+    page for documentation and the Globus file manager to download.
+
+    Returns
+    -------
+    SourceNode
+        Informational root node.  ``node_type`` is ``"group"``,
+        ``name`` is ``"Auriga"``.
+    """
+    return SourceNode(
+        name="Auriga",
+        path="Auriga",
+        description=_AURIGA_DESCRIPTION,
+        node_type="group",
+    )
