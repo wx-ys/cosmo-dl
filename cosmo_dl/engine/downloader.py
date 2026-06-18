@@ -251,27 +251,66 @@ class Downloader:
                 session, url, fallback_get=(workers > 1),
             )
 
-            # Apply server-provided filename from Content-Disposition
+            # Apply server-provided filename from Content-Disposition.
+            # When HEAD returned Content-Disposition we already know the real
+            # filename and can perform the standard pre-flight checks.
+            # Otherwise (common for TNG where HEAD omits Content-Disposition),
+            # defer the existence / partial-complete checks to
+            # _download_single, which will learn the real filename from the
+            # GET response headers.
+            cd_filename_known = metadata.cd_filename is not None
             if metadata.cd_filename:
                 dest = dest.parent / metadata.cd_filename
 
-            # -- Pre-download checks ------------------------------------------
-            self._check_already_downloaded(
-                dest=dest,
-                total=metadata.total,
-                expected_size=expected_size,
-                expected_hash=expected_hash,
-                part_path=part_path,
-                partial_size=partial_size,
-                start_time=start_time,
-            )
+            if cd_filename_known:
+                # -- Pre-download checks (real filename known) -----------------
+                self._check_already_downloaded(
+                    dest=dest,
+                    total=metadata.total,
+                    expected_size=expected_size,
+                    expected_hash=expected_hash,
+                    part_path=part_path,
+                    partial_size=partial_size,
+                    start_time=start_time,
+                )
 
-            pc_result = self._check_partial_complete(
-                part_path, dest, partial_size, metadata.total,
-            )
-            if pc_result is not None:
-                total_downloaded, final_dest = pc_result
-            elif workers <= 1:
+                pc_result = self._check_partial_complete(
+                    part_path, dest, partial_size, metadata.total,
+                )
+                if pc_result is not None:
+                    total_downloaded, final_dest = pc_result
+                elif workers <= 1:
+                    total_downloaded, final_dest = self._download_single(
+                        session=session,
+                        url=url,
+                        part_path=part_path,
+                        dest=dest,
+                        partial_size=partial_size,
+                        chunk_size=chunk_size,
+                        limiter=limiter,
+                        progress=progress,
+                        metadata=metadata,
+                        start_time=start_time,
+                    )
+                else:
+                    total_downloaded, final_dest = self._download_multi(
+                        session=session,
+                        url=url,
+                        part_path=part_path,
+                        dest=dest,
+                        partial_size=partial_size,
+                        workers=workers,
+                        chunk_size=chunk_size,
+                        limiter=limiter,
+                        progress=progress,
+                        metadata=metadata,
+                    )
+            else:
+                # cd_filename unknown — defer to _download_single which will
+                # learn the real filename from the GET response and handle:
+                #   1. real-name file exists, complete → skip
+                #   2. real-name file exists, mtime wrong → fix mtime, skip
+                #   3. URL-name file exists → rename to real name, fix mtime, skip
                 total_downloaded, final_dest = self._download_single(
                     session=session,
                     url=url,
@@ -283,19 +322,6 @@ class Downloader:
                     progress=progress,
                     metadata=metadata,
                     start_time=start_time,
-                )
-            else:
-                total_downloaded, final_dest = self._download_multi(
-                    session=session,
-                    url=url,
-                    part_path=part_path,
-                    dest=dest,
-                    partial_size=partial_size,
-                    workers=workers,
-                    chunk_size=chunk_size,
-                    limiter=limiter,
-                    progress=progress,
-                    metadata=metadata,
                 )
 
             # -- Post-download integrity check --------------------------------
@@ -659,20 +685,43 @@ class Downloader:
 
             # Capture filename from this response (TNG HEAD often omits
             # Content-Disposition, so the pre-flight metadata probe may have
-            # missed it).  If the real filename differs from the URL-derived
-            # one, re-check whether the file already exists — the pre-flight
-            # check ran against the wrong name.
+            # missed it).  Three scenarios are handled here:
+            #   1. Real-name file exists & complete → fix mtime, skip
+            #   2. Real-name file exists, mtime wrong   → fix mtime, skip
+            #   3. URL-name file exists, real-name doesn't → rename + fix mtime, skip
             cd_filename = _parse_content_disposition(
                 resp.headers.get("Content-Disposition", "")
             )
+            resp_last_modified = resp.headers.get("Last-Modified")
             if cd_filename:
-                dest = dest.parent / cd_filename
-                if total > 0 and dest.is_file() and dest.stat().st_size == total:
-                    # Already have the complete file under the real name.
+                real_dest = dest.parent / cd_filename
+
+                # Scenario 1 & 2: real-name file already exists and is complete
+                if total > 0 and real_dest.is_file() and real_dest.stat().st_size == total:
+                    _apply_last_modified(
+                        real_dest,
+                        resp_last_modified or metadata.last_modified,
+                    )
                     if part_path.is_file():
                         part_path.unlink()
                     elapsed = time.monotonic() - start_time if start_time else 0
-                    raise _AlreadyDownloaded(total, elapsed, dest)
+                    raise _AlreadyDownloaded(total, elapsed, real_dest)
+
+                # Scenario 3: URL-derived name exists, real name doesn't.
+                # Rename the local file instead of re-downloading.
+                if real_dest != dest:
+                    if total > 0 and dest.is_file() and dest.stat().st_size == total:
+                        os.replace(dest, real_dest)
+                        _apply_last_modified(
+                            real_dest,
+                            resp_last_modified or metadata.last_modified,
+                        )
+                        if part_path.is_file():
+                            part_path.unlink()
+                        elapsed = time.monotonic() - start_time if start_time else 0
+                        raise _AlreadyDownloaded(total, elapsed, real_dest)
+
+                dest = real_dest
 
             # Stream body to disk
             with open(part_path, mode) as fh:
