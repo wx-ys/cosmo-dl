@@ -282,6 +282,7 @@ class Downloader:
                     limiter=limiter,
                     progress=progress,
                     metadata=metadata,
+                    start_time=start_time,
                 )
             else:
                 total_downloaded, final_dest = self._download_multi(
@@ -623,6 +624,7 @@ class Downloader:
         limiter,
         progress,
         metadata: _Metadata,
+        start_time: float = 0,
     ) -> tuple[int, Path]:
         """Stream download into *part_path*, then rename to *dest*.
 
@@ -655,12 +657,22 @@ class Downloader:
                     if cl is not None:
                         total = int(cl)
 
-            # Capture filename from this response (in case it differs from probe)
+            # Capture filename from this response (TNG HEAD often omits
+            # Content-Disposition, so the pre-flight metadata probe may have
+            # missed it).  If the real filename differs from the URL-derived
+            # one, re-check whether the file already exists — the pre-flight
+            # check ran against the wrong name.
             cd_filename = _parse_content_disposition(
                 resp.headers.get("Content-Disposition", "")
             )
             if cd_filename:
                 dest = dest.parent / cd_filename
+                if total > 0 and dest.is_file() and dest.stat().st_size == total:
+                    # Already have the complete file under the real name.
+                    if part_path.is_file():
+                        part_path.unlink()
+                    elapsed = time.monotonic() - start_time if start_time else 0
+                    raise _AlreadyDownloaded(total, elapsed, dest)
 
             # Stream body to disk
             with open(part_path, mode) as fh:
