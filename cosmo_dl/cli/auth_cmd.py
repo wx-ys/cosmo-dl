@@ -50,6 +50,8 @@ def auth_status() -> None:
 
     keys = [
         ("tng_api_key", "TNG API"),
+        ("eagle_username", "EAGLE username"),
+        ("eagle_password", "EAGLE password"),
         ("globus_token", "Globus (Auriga)"),
     ]
 

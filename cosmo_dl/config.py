@@ -27,6 +27,8 @@ LOCAL_ENV_FILE = Path.cwd() / ".env"
 _ENV_KEY_MAP: dict[str, str] = {
     "tng_api_key": "TNG_API_KEY",
     "fire_api_key": "FIRE_API_KEY",
+    "eagle_username": "EAGLE_USERNAME",
+    "eagle_password": "EAGLE_PASSWORD",
 }
 
 
