@@ -9,12 +9,18 @@ from cosmo_dl.engine.file_manager import FileManager
               help="Chunk-parallel threads per file (for large files).")
 @click.option("-fw", "--file-workers", type=int, default=4,
               help="Number of files to download concurrently.")
-@click.option("-l", "--limit", default=None)
-@click.option("-o", "--output", default="./cosmo-dl-downloads")
-@click.option("--resume/--no-resume", default=True)
-@click.option("--hash", "hash_algo", default=None)
-@click.option("--recursive/--no-recursive", default=False)
-@click.option("--include", default="*")
+@click.option("-l", "--limit", default=None,
+              help="Rate limit (e.g. '500KB/s', '2MB/s').")
+@click.option("-o", "--output", default="./cosmo-dl-downloads",
+              help="Output directory (default: ./cosmo-dl-downloads).")
+@click.option("--resume/--no-resume", default=True,
+              help="Resume partial downloads (default: enabled).")
+@click.option("--hash", "hash_algo", default=None,
+              help="Hash algorithm to verify downloads (e.g. 'md5', 'sha256').")
+@click.option("--recursive/--no-recursive", default=False,
+              help="Recursively explore and download from URL (default: disabled).")
+@click.option("--include", default="*",
+              help="Pattern to include files when recursively exploring (default: '*').")
 def download_cmd(target, workers, file_workers, limit, output, resume, hash_algo, recursive, include):
     """Download simulation data from URL or source/dataset."""
     if recursive and (target.startswith("http://") or target.startswith("https://")):

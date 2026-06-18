@@ -4,10 +4,14 @@ from cosmo_dl.api import explore as api_explore
 
 @click.command("explore")
 @click.argument("url")
-@click.option("--recursive/--no-recursive", default=True)
-@click.option("--depth", type=int, default=None)
-@click.option("--include", default="*")
-@click.option("--exclude", default=None)
+@click.option("--recursive/--no-recursive", default=True,
+              help="Recursively explore sub-directories (default: enabled).")
+@click.option("--depth", type=int, default=None,
+              help="Maximum depth for recursive exploration (default: unlimited).")
+@click.option("--include", default="*",
+              help="Pattern to include files (default: '*').")
+@click.option("--exclude", default=None,
+              help="Pattern to exclude files (default: none).")
 def explore_cmd(url, recursive, depth, include, exclude):
     """List files available at a URL."""
     click.echo(f"Exploring {url} ...")
