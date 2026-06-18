@@ -3,12 +3,44 @@ from __future__ import annotations
 
 import http.cookiejar
 from typing import Any, ContextManager
+from urllib.parse import urlparse
 
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 from cosmo_dl.engine.types import AuthConfig
+
+
+class _CrossOriginSession(requests.Session):
+    """A :class:`requests.Session` that strips the ``api-key`` header on
+    cross-origin redirects.
+
+    The TNG data server rejects requests that carry both an ``api-key``
+    header and a ``?token=...`` query parameter.  Since ``requests``
+    normally preserves custom headers across redirects, the ``api-key``
+    set for API authentication would leak to the data server and cause
+    403 Forbidden errors.
+    """
+
+    def rebuild_auth(self, prepared_request, response):
+        # Standard cross-origin auth stripping
+        headers = prepared_request.headers
+        url = prepared_request.url
+
+        if "Authorization" in headers:
+            original = urlparse(response.request.url)
+            redirect = urlparse(url)
+            if original.hostname != redirect.hostname:
+                del headers["Authorization"]
+
+        # Also strip api-key so it does not leak to data servers that
+        # already authenticate via ?token=... query parameters.
+        if response is not None and response.request and response.request.url:
+            original = urlparse(response.request.url)
+            redirect = urlparse(url)
+            if original.hostname != redirect.hostname:
+                headers.pop("api-key", None)
 
 
 class StreamResponse:
@@ -127,8 +159,10 @@ class Session:
         if cookies:
             merged_cookies = cookies
 
-        # Build requests.Session with retry adapter (matching user's proven config)
-        self._client = requests.Session()
+        # Build session with retry adapter.  _CrossOriginSession strips the
+        # api-key header on cross-origin redirects so it does not leak to
+        # data servers that authenticate via ?token=... query parameters.
+        self._client = _CrossOriginSession()
 
         if merged_headers:
             self._client.headers.update(merged_headers)

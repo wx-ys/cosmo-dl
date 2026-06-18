@@ -350,7 +350,9 @@ class Downloader:
 
         Uses an escalating three-phase strategy so that the cheapest
         request (HEAD) is tried first, falling back to heavier probes
-        only when necessary.
+        only when necessary.  When both Phase 2 (stream GET) and
+        Phase 3 (Range probe) are required they are issued in parallel
+        to avoid an extra sequential round-trip.
 
         When *fallback_get* is ``False`` (single-threaded downloads),
         only Phase 1 (HEAD) is executed.  The stream GET response is
@@ -392,46 +394,108 @@ class Downloader:
                 last_modified=last_modified,
             )
 
-        # Phase 2: stream GET fallback when HEAD didn't give us a size
-        if total <= 0:
-            with session.stream(url) as resp:
-                resp.raise_for_status()
-                cl = resp.headers.get("Content-Length")
-                cr = resp.headers.get("Content-Range")
-                if cr is not None:
-                    try:
-                        total = int(cr.rsplit("/", 1)[-1])
-                    except (ValueError, IndexError):
-                        pass
-                if total <= 0 and cl is not None:
-                    total = int(cl)
-                if cd_filename is None:
-                    cd_filename = _parse_content_disposition(
+        # ------------------------------------------------------------------
+        # Determine which follow-up probes are needed
+        # ------------------------------------------------------------------
+        need_stream_get = (total <= 0)                        # Phase 2
+        need_range = (cd_filename is None or last_modified is None)  # Phase 3
+
+        def _stream_get_probe():
+            """Phase 2: stream GET to learn total size (and incidentally
+            fill in any missing Content-Disposition / Last-Modified)."""
+            result: dict = {"total": 0}
+            try:
+                with session.stream(url) as resp:
+                    resp.raise_for_status()
+                    cl = resp.headers.get("Content-Length")
+                    cr = resp.headers.get("Content-Range")
+                    if cr is not None:
+                        try:
+                            result["total"] = int(cr.rsplit("/", 1)[-1])
+                        except (ValueError, IndexError):
+                            pass
+                    if result["total"] <= 0 and cl is not None:
+                        result["total"] = int(cl)
+                    cd = _parse_content_disposition(
                         resp.headers.get("Content-Disposition", "")
                     )
-                if last_modified is None:
-                    last_modified = resp.headers.get("Last-Modified")
-            if total <= 0:
-                raise RuntimeError(
-                    "Cannot perform multi-threaded download: "
-                    "server did not provide Content-Length"
-                )
+                    if cd:
+                        result["cd_filename"] = cd
+                    lm = resp.headers.get("Last-Modified")
+                    if lm:
+                        result["last_modified"] = lm
+            except Exception:
+                pass
+            return result
 
-        # Phase 3: tiny Range GET probe for any remaining missing metadata
-        if total > 0 and (cd_filename is None or last_modified is None):
+        def _range_probe():
+            """Phase 3: tiny Range GET to fill in Content-Disposition /
+            Last-Modified when HEAD did not provide them."""
+            result: dict = {}
             try:
                 with session.stream(
                     url, headers={"Range": "bytes=0-0"},
                 ) as probe:
                     probe.raise_for_status()
-                    if cd_filename is None:
-                        cd_filename = _parse_content_disposition(
-                            probe.headers.get("Content-Disposition", "")
-                        )
-                    if last_modified is None:
-                        last_modified = probe.headers.get("Last-Modified")
+                    cd = _parse_content_disposition(
+                        probe.headers.get("Content-Disposition", "")
+                    )
+                    if cd:
+                        result["cd_filename"] = cd
+                    lm = probe.headers.get("Last-Modified")
+                    if lm:
+                        result["last_modified"] = lm
             except Exception:
                 pass
+            return result
+
+        # ------------------------------------------------------------------
+        # Execute follow-up probes — in parallel when both are needed
+        # ------------------------------------------------------------------
+        if need_stream_get and need_range:
+            # Phase 2 ‖ Phase 3 — saves one sequential round-trip
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                stream_fut = executor.submit(_stream_get_probe)
+                range_fut = executor.submit(_range_probe)
+                stream_result = stream_fut.result()
+                range_result = range_fut.result()
+
+            if stream_result["total"] > 0:
+                total = stream_result["total"]
+            if cd_filename is None:
+                cd_filename = (
+                    stream_result.get("cd_filename")
+                    or range_result.get("cd_filename")
+                )
+            if last_modified is None:
+                last_modified = (
+                    stream_result.get("last_modified")
+                    or range_result.get("last_modified")
+                )
+
+        elif need_stream_get:
+            # Phase 2 only
+            stream_result = _stream_get_probe()
+            if stream_result["total"] > 0:
+                total = stream_result["total"]
+            if cd_filename is None:
+                cd_filename = stream_result.get("cd_filename")
+            if last_modified is None:
+                last_modified = stream_result.get("last_modified")
+
+        elif need_range:
+            # Phase 3 only
+            range_result = _range_probe()
+            if cd_filename is None:
+                cd_filename = range_result.get("cd_filename")
+            if last_modified is None:
+                last_modified = range_result.get("last_modified")
+
+        if total <= 0:
+            raise RuntimeError(
+                "Cannot perform multi-threaded download: "
+                "server did not provide Content-Length"
+            )
 
         return _Metadata(
             total=total,
@@ -643,7 +707,9 @@ class Downloader:
         progress,
         metadata: _Metadata,
     ) -> tuple[int, Path]:
-        """Parallel chunk downloads assembled into *part_path*, then renamed to *dest*.
+        """Parallel chunk download: each chunk is written directly to the
+        correct byte offset via :func:`os.pwrite`, avoiding an in-memory
+        assembly buffer.
 
         Returns ``(bytes_downloaded, final_dest_path)``.
         """
@@ -657,30 +723,31 @@ class Downloader:
         # -- Calculate chunk boundaries -------------------------------------
         chunks = self._calculate_chunks(total, workers)
 
-        # -- Download chunks in parallel ------------------------------------
-        chunk_data: dict[int, bytes] = {}
-        downloaded = partial_size
+        # -- Pre-allocate the .part file (sparse on most filesystems) --------
+        with open(part_path, "w+b") as fh:
+            fh.truncate(total)
 
-        with ThreadPoolExecutor(max_workers=min(workers, len(chunks))) as executor:
-            futures = [
-                executor.submit(
-                    _fetch_chunk,
-                    session, url, chunk_size, idx, start, end, limiter,
-                )
-                for idx, start, end in chunks
-            ]
-            for future in as_completed(futures):
-                idx, data = future.result()
-                chunk_data[idx] = data
-                downloaded += len(data)
+            # -- Download chunks in parallel, writing as they arrive ---------
+            downloaded = 0
 
-                if progress is not None:
-                    progress(downloaded, total)
+            with ThreadPoolExecutor(max_workers=min(workers, len(chunks))) as executor:
+                # Map each future to its (idx, start_byte) for pwrite
+                future_map: dict = {}
+                for idx, start, end in chunks:
+                    fut = executor.submit(
+                        _fetch_chunk,
+                        session, url, chunk_size, idx, start, end, limiter,
+                    )
+                    future_map[fut] = (idx, start)
 
-        # -- Assemble chunks in order into .part file -----------------------
-        with open(part_path, "wb") as fh:
-            for i in range(len(chunks)):
-                fh.write(chunk_data[i])
+                for future in as_completed(future_map):
+                    idx, data = future.result()
+                    _, start = future_map[future]
+                    os.pwrite(fh.fileno(), data, start)
+                    downloaded += len(data)
+
+                    if progress is not None:
+                        progress(downloaded, total)
 
         self._finalize_download(part_path, dest, metadata.last_modified)
         return downloaded, dest
