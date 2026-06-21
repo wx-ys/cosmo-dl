@@ -10,7 +10,7 @@ class TestListSources:
     def test_list_sources_returns_names(self):
         names = list_sources()
         assert isinstance(names, list)
-        assert "FIRE" in names
+        assert "FIRE2" in names
         assert "Auriga" in names
 
 
@@ -55,6 +55,6 @@ class TestDownload:
     def test_download_source_dataset(self, tmp_path):
         content = b"fire data"
         from cosmo_dl.api import _resolve_target
-        urls = _resolve_target("FIRE/m11i_res7100")
+        urls = _resolve_target("FIRE2/core/m12i_res7100/output/snapdir_000")
         assert len(urls) > 0
         assert urls[0].startswith("https://")

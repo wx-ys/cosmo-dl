@@ -52,15 +52,15 @@ def test_source_list_command():
     runner = CliRunner()
     result = runner.invoke(cli, ["source", "list"])
     assert result.exit_code == 0
-    assert "FIRE" in result.output
+    assert "FIRE2" in result.output
     assert "Auriga" in result.output
 
 
 def test_source_info_command():
     runner = CliRunner()
-    result = runner.invoke(cli, ["source", "info", "FIRE"])
+    result = runner.invoke(cli, ["source", "info", "FIRE2"])
     assert result.exit_code == 0
-    assert "FIRE" in result.output
+    assert "FIRE2" in result.output
 
 
 def test_download_command_help():

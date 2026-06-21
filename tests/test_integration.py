@@ -73,7 +73,7 @@ class TestEndToEndDownload:
         """Verify source -> URL resolution works end-to-end."""
         from cosmo_dl.registry.registry import Registry
         reg = Registry()
-        urls = reg.resolve("FIRE/m11i_res7100")
+        urls = reg.resolve("FIRE2/core/m12i_res7100/output/snapdir_000")
         assert len(urls) > 0
         for url in urls:
             assert url.startswith("https://")
