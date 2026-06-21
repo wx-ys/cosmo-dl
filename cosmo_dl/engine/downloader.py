@@ -269,12 +269,19 @@ class Downloader:
             partial_size: int = 0
 
             if resume:
+                meta_path = self._meta_path(part_path)
                 if part_path.is_file():
                     partial_size = part_path.stat().st_size
-                    # Guard against sparse .part files left by interrupted
-                    # multi-threaded downloads (truncate pre-allocates the
-                    # full size but writes very little data).
-                    if partial_size > 0 and _is_sparse_file(part_path):
+                    if meta_path.is_file():
+                        # A .part.meta sidecar exists — let _download_multi
+                        # figure out which chunks are already done.
+                        logger.debug(
+                            "Found chunk-resume metadata; "
+                            "will resume completed chunks."
+                        )
+                    elif partial_size > 0 and _is_sparse_file(part_path):
+                        # No sidecar + sparse file = stale pre-allocation
+                        # from an interrupted download that wrote no meta.
                         logger.warning(
                             "Removing stale .part file from interrupted "
                             "multi-threaded download (%s bytes apparent, "
@@ -283,9 +290,19 @@ class Downloader:
                         )
                         part_path.unlink()
                         partial_size = 0
-                elif dest.is_file() and dest.stat().st_size > 0:
-                    shutil.copy2(dest, part_path)
-                    partial_size = dest.stat().st_size
+                else:
+                    # .part file gone but .part.meta still exists?  Clean up
+                    # the orphaned sidecar so stale metadata doesn't trick
+                    # _download_multi into skipping chunks.
+                    if meta_path.is_file():
+                        logger.debug(
+                            "Removing orphaned chunk-resume metadata "
+                            "(part file no longer exists)."
+                        )
+                        self._delete_chunk_meta(part_path)
+                    if dest.is_file() and dest.stat().st_size > 0:
+                        shutil.copy2(dest, part_path)
+                        partial_size = dest.stat().st_size
 
             # -- Gather remote metadata ---------------------------------------
             # Phase 1: HEAD always — cheapest probe for Content-Length and
@@ -637,8 +654,9 @@ class Downloader:
                 elapsed = time.monotonic() - start_time
                 raise _AlreadyDownloaded(total, elapsed, dest)
 
-    @staticmethod
+    @classmethod
     def _check_partial_complete(
+        cls,
         part_path: Path,
         dest: Path,
         partial_size: int,
@@ -646,15 +664,35 @@ class Downloader:
     ) -> tuple[int, Path] | None:
         """Return ``(total, dest)`` if the partial file is already complete.
 
-        When the partial file already covers the entire remote file,
-        rename it to the final destination and return the result tuple.
-        Otherwise return ``None`` to indicate that downloading should
-        proceed.
+        For multi-threaded downloads a ``.part.meta`` sidecar tracks
+        which chunks have been written; the file is only considered
+        complete when **all** chunks are recorded in the sidecar.
+        (The file-system size alone is meaningless because the whole
+        file is pre-allocated with ``truncate``.)
+
+        For single-threaded downloads (no sidecar), the file-system
+        size is the actual number of bytes written and is authoritative.
         """
-        if total > 0 and partial_size >= total:
-            os.replace(part_path, dest)
-            return total, dest
-        return None
+        if total <= 0 or partial_size < total:
+            return None
+
+        meta = cls._load_chunk_meta(part_path)
+        if meta is not None and meta.get("total") == total:
+            # Multi-threaded: check that all chunks are recorded
+            all_chunks = cls._calculate_chunks(total, 4)
+            completed = {
+                (s, e) for (s, e) in meta.get("completed", [])
+            }
+            if len(completed) >= len(all_chunks):
+                os.replace(part_path, dest)
+                cls._delete_chunk_meta(part_path)
+                return total, dest
+            # Not all chunks done — fall through to _download_multi
+            return None
+
+        # No meta file: treat as single-threaded (file-system size is real)
+        os.replace(part_path, dest)
+        return total, dest
 
     @staticmethod
     def _calculate_chunks(
@@ -662,15 +700,21 @@ class Downloader:
     ) -> list[tuple[int, int, int]]:
         """Compute byte-range boundaries for parallel download.
 
-        Returns a list of ``(idx, start_byte, end_byte_inclusive)`` tuples
-        that cover the range ``[0, total)`` without gaps.
+        Chunks are sized so that each one completes in ~10–30 s at typical
+        speeds (~200 MiB/chunk).  This keeps resume granularity fine enough
+        that even a short download session can recover some progress.
         """
-        num_chunks = max(workers * 4, 8)
-        actual_chunk_size = max(
-            1024 * 1024, (total + num_chunks - 1) // num_chunks,
+        # Target ~200 MiB per chunk → ~18 s per chunk at 11 MiB/s
+        target_mb = 200 * MB
+        num_chunks = max(
+            workers * 4,                              # at least this many
+            (total + target_mb - 1) // target_mb,     # enough to hit target size
         )
-        num_chunks = (total + actual_chunk_size - 1) // actual_chunk_size
-        num_chunks = min(num_chunks, workers * 8)
+        # Cap to avoid excessive HTTP Range requests
+        num_chunks = min(num_chunks, 1024)
+
+        actual_chunk_size = (total + num_chunks - 1) // num_chunks
+        actual_chunk_size = max(MB, actual_chunk_size)   # floor: 1 MiB
 
         chunks: list[tuple[int, int, int]] = []
         for i in range(num_chunks):
@@ -679,6 +723,62 @@ class Downloader:
             if start < total:
                 chunks.append((i, start, end))
         return chunks
+
+    # ------------------------------------------------------------------
+    # Chunk-resume metadata (sidecar .part.meta JSON file)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _meta_path(part_path: Path) -> Path:
+        """Return the sidecar path for chunk-resume metadata."""
+        return Path(str(part_path) + ".meta")
+
+    @staticmethod
+    def _load_chunk_meta(part_path: Path) -> dict | None:
+        """Load completed-chunk ranges from a ``.part.meta`` sidecar file.
+
+        Returns ``{"total": N, "completed": [[s1, e1], ...]}`` or *None*
+        if the sidecar does not exist or is unreadable.
+        """
+        meta_path = Downloader._meta_path(part_path)
+        if not meta_path.is_file():
+            return None
+        try:
+            data = json.loads(meta_path.read_text())
+            if (
+                isinstance(data, dict)
+                and "total" in data
+                and "completed" in data
+                and isinstance(data["completed"], list)
+            ):
+                return data
+        except (json.JSONDecodeError, OSError):
+            pass
+        # Corrupt meta → discard
+        try:
+            meta_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        return None
+
+    @staticmethod
+    def _save_chunk_meta(
+        part_path: Path, total: int, completed: list[tuple[int, int]],
+    ) -> None:
+        """Write (or update) the chunk-resume sidecar file."""
+        meta_path = Downloader._meta_path(part_path)
+        payload = {"total": total, "completed": completed}
+        tmp = Path(str(meta_path) + ".tmp")
+        tmp.write_text(json.dumps(payload, separators=(",", ":")))
+        os.replace(tmp, meta_path)
+
+    @staticmethod
+    def _delete_chunk_meta(part_path: Path) -> None:
+        """Remove the chunk-resume sidecar after a successful download."""
+        try:
+            Downloader._meta_path(part_path).unlink(missing_ok=True)
+        except OSError:
+            pass
 
     @staticmethod
     def _finalize_download(
@@ -827,41 +927,72 @@ class Downloader:
         progress,
         metadata: _Metadata,
     ) -> tuple[int, Path]:
-        """Parallel chunk download: each chunk is written directly to the
-        correct byte offset via :func:`os.pwrite`, avoiding an in-memory
-        assembly buffer.
+        """Parallel chunk download with chunk-level resume support.
 
-        Returns ``(bytes_downloaded, final_dest_path)``.
+        Writes each chunk to its correct byte offset via :func:`os.pwrite`.
+        A ``.part.meta`` sidecar file records which byte-ranges have been
+        committed to disk so that an interrupted download can resume by
+        re-fetching only the missing chunks.
         """
         total = metadata.total
 
-        # -- Sanity-check partial data --------------------------------------
-        if partial_size >= total:
-            if _is_sparse_file(part_path):
-                logger.warning(
-                    "Existing .part file is sparse (interrupted pre-allocation); "
-                    "restarting download."
-                )
-                part_path.unlink()
-            else:
-                self._finalize_download(part_path, dest, metadata.last_modified)
-                return total, dest
+        # -- Load resume state from sidecar ---------------------------------
+        meta = self._load_chunk_meta(part_path)
+        completed_ranges: list[tuple[int, int]] = []
+        if meta is not None and meta.get("total") == total:
+            completed_ranges = [
+                (s, e) for (s, e) in meta["completed"]
+                if isinstance(s, int) and isinstance(e, int)
+            ]
+            logger.info(
+                "Resuming multi-threaded download: %d/%d chunks already done.",
+                len(completed_ranges), 0,
+            )
 
-        # -- Calculate chunk boundaries -------------------------------------
-        chunks = self._calculate_chunks(total, workers)
+        # -- If all chunks are done, finalize immediately --------------------
+        all_chunks = self._calculate_chunks(total, workers)
+        if len(completed_ranges) >= len(all_chunks):
+            self._finalize_download(part_path, dest, metadata.last_modified)
+            self._delete_chunk_meta(part_path)
+            return total, dest
 
-        # -- Pre-allocate the .part file (sparse on most filesystems) --------
+        # -- Determine which chunks still need downloading -------------------
+        completed_set: set[tuple[int, int]] = {
+            (s, e) for (s, e) in completed_ranges
+        }
+        pending_chunks = [
+            (idx, start, end)
+            for (idx, start, end) in all_chunks
+            if (start, end) not in completed_set
+        ]
+
+        if pending_chunks and len(pending_chunks) < len(all_chunks):
+            logger.info(
+                "Downloading %d remaining chunk(s) (%d already done).",
+                len(pending_chunks),
+                len(all_chunks) - len(pending_chunks),
+            )
+
+        # -- Pre-allocate / open the .part file -----------------------------
         logger.info(
-            "Pre-allocating %.1f GiB for multi-threaded download (%d chunks × %d workers).",
-            total / (1024 ** 3), len(chunks), workers,
+            "Pre-allocating %.1f GiB for multi-threaded download "
+            "(%d chunks × %d workers).",
+            total / (1024 ** 3), len(pending_chunks), workers,
         )
+        # Count bytes already downloaded from the completed ranges
+        completed_bytes = sum(
+            (e - s + 1) for (s, e) in completed_ranges
+        )
+
         with open(part_path, "w+b") as fh:
             fh.truncate(total)
 
             # -- Download chunks in parallel, writing as they arrive ---------
-            downloaded = 0
+            downloaded = completed_bytes
             _dl_lock = threading.Lock()
             _stop_event = threading.Event()
+            # Working copy of completed ranges for the sidecar
+            _completed: list[tuple[int, int]] = list(completed_ranges)
 
             def _on_read(n: int) -> None:
                 """Fine-grained progress: called by every worker after each read."""
@@ -869,9 +1000,15 @@ class Downloader:
                 with _dl_lock:
                     downloaded += n
 
+            def _on_chunk_done(start: int, end: int) -> None:
+                """Called under _dl_lock after a chunk is written to disk."""
+                nonlocal _completed
+                _completed.append((start, end))
+                # Persist to sidecar for crash recovery
+                self._save_chunk_meta(part_path, total, _completed)
+
             def _poll_progress() -> None:
-                """Background thread: report progress at ~4 Hz so the
-                progress bar stays responsive between chunk completions."""
+                """Background thread: report progress at ~4 Hz."""
                 while not _stop_event.is_set():
                     _stop_event.wait(0.25)
                     if progress is not None:
@@ -886,30 +1023,38 @@ class Downloader:
                 _progress_thread.start()
 
             try:
-                with ThreadPoolExecutor(max_workers=min(workers, len(chunks))) as executor:
-                    # Map each future to its (idx, start_byte) for pwrite
-                    future_map: dict = {}
-                    for idx, start, end in chunks:
-                        fut = executor.submit(
-                            _fetch_chunk,
-                            session, url, chunk_size, idx, start, end, limiter, _on_read,
-                        )
-                        future_map[fut] = (idx, start)
+                if not pending_chunks:
+                    # All chunks already done (shouldn't normally reach here
+                    # due to the early-return above, but be defensive).
+                    pass
+                else:
+                    with ThreadPoolExecutor(
+                        max_workers=min(workers, len(pending_chunks)),
+                    ) as executor:
+                        future_map: dict = {}
+                        for idx, start, end in pending_chunks:
+                            fut = executor.submit(
+                                _fetch_chunk,
+                                session, url, chunk_size,
+                                idx, start, end, limiter, _on_read,
+                            )
+                            future_map[fut] = (idx, start, end)
 
-                    for future in as_completed(future_map):
-                        idx, data = future.result()
-                        _, start = future_map[future]
-                        os.pwrite(fh.fileno(), data, start)
-                        # `downloaded` is already kept current by _on_read
-                        # and the polling thread; fire one final update.
-                        if progress is not None:
-                            progress(downloaded, total)
+                        for future in as_completed(future_map):
+                            idx, data = future.result()
+                            _, start, end = future_map[future]
+                            os.pwrite(fh.fileno(), data, start)
+                            with _dl_lock:
+                                _on_chunk_done(start, end)
+                            if progress is not None:
+                                progress(downloaded, total)
             finally:
                 _stop_event.set()
                 if progress is not None:
                     progress(downloaded, total)  # final snapshot
 
         self._finalize_download(part_path, dest, metadata.last_modified)
+        self._delete_chunk_meta(part_path)
         return downloaded, dest
 
 
