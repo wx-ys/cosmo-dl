@@ -11,6 +11,24 @@ def source_cmd() -> None:
     pass
 
 
+def _render_metadata(node) -> None:
+    """Render common metadata fields for any node type.
+
+    Shows ``data_page`` and ``download`` links for group/category nodes
+    that have them (e.g. Auriga informational entry).
+    """
+    if not node.metadata:
+        return
+
+    data_page = node.metadata.get("data_page")
+    download = node.metadata.get("download")
+
+    if data_page and isinstance(data_page, str):
+        click.echo(f"  Data page:   {data_page}")
+    if download and isinstance(download, str):
+        click.echo(f"  Download:    {download}")
+
+
 @source_cmd.command("list")
 @click.argument("path", required=False, default="")
 def source_list(path: str) -> None:
@@ -52,6 +70,8 @@ def source_list(path: str) -> None:
     label = type_label.get(node.node_type, "")
     click.echo(f"\n{label} {node.path}/")
     click.echo(f"  {node.description}")
+
+    _render_metadata(node)
 
     # Show simulation metadata
     if node.node_type == "simulation" and node.metadata:
@@ -115,6 +135,8 @@ def source_info(path: str) -> None:
     click.echo(f"Path:        {node.path}/")
     click.echo(f"Type:        {node.node_type}")
     click.echo(f"Description: {node.description}")
+
+    _render_metadata(node)
 
     if node.node_type == "dataset" and node.url:
         click.echo(f"URL:         {node.url}")
