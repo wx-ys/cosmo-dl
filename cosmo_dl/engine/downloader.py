@@ -1,8 +1,11 @@
 """Core download engine with resume, multi-threading, rate limiting, and integrity."""
 from __future__ import annotations
 
+import json
+import logging
 import os
 import re
+import threading
 import time
 import shutil
 import email.utils
@@ -14,7 +17,31 @@ from typing import Callable
 from cosmo_dl.engine.types import DownloadResult
 from cosmo_dl.engine.file_manager import FileManager
 
+logger = logging.getLogger(__name__)
+
 MB = 1_048_576
+
+
+def _is_sparse_file(filepath: Path) -> bool:
+    """Check whether *filepath* is sparse (apparent size > disk blocks).
+
+    On most Linux filesystems :func:`os.truncate` creates a sparse file
+    — the apparent size is large but actual disk usage is near zero.
+    This helper detects such pre-allocated-but-unwritten files so the
+    downloader can restart them from scratch instead of treating them
+    as complete.
+    """
+    try:
+        stat = filepath.stat()
+        apparent = stat.st_size
+        if apparent <= 0:
+            return False
+        # st_blocks is reported in 512-byte units
+        actual = stat.st_blocks * 512
+        # Allow a small tolerance so nearly-complete downloads aren't discarded
+        return actual < apparent * 0.8
+    except Exception:
+        return False
 
 # Pattern for Content-Disposition filename extraction (RFC 6266 / RFC 5987)
 _CD_FILENAME_RE = re.compile(
@@ -100,6 +127,7 @@ def _fetch_chunk(
     start: int,
     end: int,
     limiter=None,
+    on_read: Callable[[int], None] | None = None,
 ) -> tuple[int, bytes]:
     """Fetch a single byte range from *url*.
 
@@ -120,6 +148,9 @@ def _fetch_chunk(
     limiter : RateLimiter or None
         Optional bandwidth limiter.  Rate limiting is applied **during**
         network read so that the transfer itself is throttled.
+    on_read : callable or None
+        Called as ``on_read(n_bytes)`` after each successful read from
+        the stream, for fine-grained progress reporting.
 
     Returns
     -------
@@ -138,6 +169,8 @@ def _fetch_chunk(
                 if wait > 0:
                     time.sleep(wait)
             buf.extend(piece)
+            if on_read is not None:
+                on_read(len(piece))
     return idx, bytes(buf)
 
 
@@ -238,18 +271,44 @@ class Downloader:
             if resume:
                 if part_path.is_file():
                     partial_size = part_path.stat().st_size
+                    # Guard against sparse .part files left by interrupted
+                    # multi-threaded downloads (truncate pre-allocates the
+                    # full size but writes very little data).
+                    if partial_size > 0 and _is_sparse_file(part_path):
+                        logger.warning(
+                            "Removing stale .part file from interrupted "
+                            "multi-threaded download (%s bytes apparent, "
+                            "but file is sparse — restarting from scratch).",
+                            partial_size,
+                        )
+                        part_path.unlink()
+                        partial_size = 0
                 elif dest.is_file() and dest.stat().st_size > 0:
                     shutil.copy2(dest, part_path)
                     partial_size = dest.stat().st_size
 
             # -- Gather remote metadata ---------------------------------------
-            # Single-threaded: HEAD only (the stream GET response is needed by
-            # _download_single — we must not consume it here).
-            # Multi-threaded: full probing (HEAD → stream GET → Range probe)
-            # so we know the total size for chunk partitioning.
+            # Phase 1: HEAD always — cheapest probe for Content-Length and
+            # Content-Disposition.  If the server provides Content-Length
+            # and multi-threading is requested, a follow-up stream GET +
+            # Range probe fills in any missing CD / Last-Modified headers.
             metadata = self._gather_metadata(
-                session, url, fallback_get=(workers > 1),
+                session, url, fallback_get=False,
             )
+
+            # When Content-Length is known, multi-threaded downloads can
+            # partition the file into byte-range chunks.  Follow up with
+            # stream + Range probes to learn Content-Disposition /
+            # Last-Modified if HEAD did not provide them.
+            if metadata.total > 0 and workers > 1:
+                metadata = self._gather_metadata(
+                    session, url, fallback_get=True,
+                )
+            elif metadata.total <= 0 and workers > 1:
+                logger.warning(
+                    "Server did not provide Content-Length; "
+                    "falling back to single-threaded download"
+                )
 
             # Apply server-provided filename from Content-Disposition.
             # When HEAD returned Content-Disposition we already know the real
@@ -279,7 +338,7 @@ class Downloader:
                 )
                 if pc_result is not None:
                     total_downloaded, final_dest = pc_result
-                elif workers <= 1:
+                elif workers <= 1 or metadata.total <= 0:
                     total_downloaded, final_dest = self._download_single(
                         session=session,
                         url=url,
@@ -519,9 +578,9 @@ class Downloader:
                 last_modified = range_result.get("last_modified")
 
         if total <= 0:
-            raise RuntimeError(
-                "Cannot perform multi-threaded download: "
-                "server did not provide Content-Length"
+            logger.warning(
+                "Server did not provide Content-Length; "
+                "falling back to single-threaded download"
             )
 
         return _Metadata(
@@ -778,37 +837,77 @@ class Downloader:
 
         # -- Sanity-check partial data --------------------------------------
         if partial_size >= total:
-            self._finalize_download(part_path, dest, metadata.last_modified)
-            return total, dest
+            if _is_sparse_file(part_path):
+                logger.warning(
+                    "Existing .part file is sparse (interrupted pre-allocation); "
+                    "restarting download."
+                )
+                part_path.unlink()
+            else:
+                self._finalize_download(part_path, dest, metadata.last_modified)
+                return total, dest
 
         # -- Calculate chunk boundaries -------------------------------------
         chunks = self._calculate_chunks(total, workers)
 
         # -- Pre-allocate the .part file (sparse on most filesystems) --------
+        logger.info(
+            "Pre-allocating %.1f GiB for multi-threaded download (%d chunks × %d workers).",
+            total / (1024 ** 3), len(chunks), workers,
+        )
         with open(part_path, "w+b") as fh:
             fh.truncate(total)
 
             # -- Download chunks in parallel, writing as they arrive ---------
             downloaded = 0
+            _dl_lock = threading.Lock()
+            _stop_event = threading.Event()
 
-            with ThreadPoolExecutor(max_workers=min(workers, len(chunks))) as executor:
-                # Map each future to its (idx, start_byte) for pwrite
-                future_map: dict = {}
-                for idx, start, end in chunks:
-                    fut = executor.submit(
-                        _fetch_chunk,
-                        session, url, chunk_size, idx, start, end, limiter,
-                    )
-                    future_map[fut] = (idx, start)
+            def _on_read(n: int) -> None:
+                """Fine-grained progress: called by every worker after each read."""
+                nonlocal downloaded
+                with _dl_lock:
+                    downloaded += n
 
-                for future in as_completed(future_map):
-                    idx, data = future.result()
-                    _, start = future_map[future]
-                    os.pwrite(fh.fileno(), data, start)
-                    downloaded += len(data)
-
+            def _poll_progress() -> None:
+                """Background thread: report progress at ~4 Hz so the
+                progress bar stays responsive between chunk completions."""
+                while not _stop_event.is_set():
+                    _stop_event.wait(0.25)
                     if progress is not None:
-                        progress(downloaded, total)
+                        with _dl_lock:
+                            cur = downloaded
+                        progress(cur, total)
+
+            if progress is not None:
+                _progress_thread = threading.Thread(
+                    target=_poll_progress, daemon=True,
+                )
+                _progress_thread.start()
+
+            try:
+                with ThreadPoolExecutor(max_workers=min(workers, len(chunks))) as executor:
+                    # Map each future to its (idx, start_byte) for pwrite
+                    future_map: dict = {}
+                    for idx, start, end in chunks:
+                        fut = executor.submit(
+                            _fetch_chunk,
+                            session, url, chunk_size, idx, start, end, limiter, _on_read,
+                        )
+                        future_map[fut] = (idx, start)
+
+                    for future in as_completed(future_map):
+                        idx, data = future.result()
+                        _, start = future_map[future]
+                        os.pwrite(fh.fileno(), data, start)
+                        # `downloaded` is already kept current by _on_read
+                        # and the polling thread; fire one final update.
+                        if progress is not None:
+                            progress(downloaded, total)
+            finally:
+                _stop_event.set()
+                if progress is not None:
+                    progress(downloaded, total)  # final snapshot
 
         self._finalize_download(part_path, dest, metadata.last_modified)
         return downloaded, dest

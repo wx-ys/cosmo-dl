@@ -274,37 +274,61 @@ def download(
         # --- Sequential path (single file or file_workers=1) ---------------
         if file_workers <= 1 or len(url_dests) <= 1:
             results: list[DownloadResult] = []
-            last_speed = ""
-            url_iter = _tqdm(
-                url_dests, desc="Files", unit="file", disable=len(url_dests) <= 1,
-            )
+            single_file = len(url_dests) <= 1
+
+            # For single files, show a byte-level progress bar so the user
+            # can see download speed and progress in real time.
+            byte_bar: _tqdm | None = None
 
             _speed_t0 = time.monotonic()
             _speed_last_bytes = 0
+            _current_displayed: int = 0
 
-            def _progress_cb(downloaded: int, _total: int) -> None:
-                nonlocal _speed_t0, _speed_last_bytes
+            def _progress_cb(downloaded: int, total: int) -> None:
+                nonlocal _speed_t0, _speed_last_bytes, _current_displayed
+
+                if byte_bar is not None:
+                    # Update the byte-level bar
+                    if total > 0 and byte_bar.total != total:
+                        byte_bar.total = total
+                        byte_bar.refresh()
+                    delta = downloaded - _current_displayed
+                    if delta > 0:
+                        byte_bar.update(delta)
+                        _current_displayed = downloaded
+
                 now = time.monotonic()
                 elapsed = now - _speed_t0
                 if elapsed >= 0.5:
                     speed = ((downloaded - _speed_last_bytes) / elapsed
                              if elapsed > 0 else 0)
                     speed_str = _fmt_speed(speed)
-                    url_iter.set_postfix_str(f"{_current_fname[:20]} {speed_str}")
+                    if byte_bar is not None:
+                        byte_bar.set_postfix_str(f"{speed_str}")
                     _speed_t0 = now
                     _speed_last_bytes = downloaded
 
-            _current_fname = ""
-
-            for url, relpath, local_dest in url_iter:
+            for url, relpath, local_dest in url_dests:
                 fname = local_dest.name
-                _current_fname = fname
-
-                postfix = f"{fname[:25]} {last_speed}" if last_speed else fname[:30]
-                url_iter.set_postfix_str(postfix)
 
                 _speed_t0 = time.monotonic()
                 _speed_last_bytes = 0
+                _current_displayed = 0
+
+                # For single files, show a byte-level progress bar
+                if single_file:
+                    byte_bar = _tqdm(
+                        total=None,
+                        desc=fname[:30],
+                        unit="B",
+                        unit_scale=True,
+                        unit_divisor=1024,
+                        leave=True,
+                    )
+                else:
+                    byte_bar = None
+                    # For multi-file sequential, show file name as we start
+                    _tqdm.write(f"  ... {fname}")
 
                 result = downloader.download(
                     url,
@@ -317,13 +341,16 @@ def download(
                     expected_size=expected_size,
                 )
 
+                # Close the byte bar if active
+                if byte_bar is not None:
+                    if result.success:
+                        byte_bar.set_postfix_str("done")
+                    else:
+                        byte_bar.set_postfix_str("FAILED")
+                    byte_bar.close()
+
                 if not result.success:
                     _tqdm.write(f"  FAIL  {local_dest}\n        {result.message}")
-                else:
-                    speed_mb = result.speed / (1024 * 1024) if result.speed else 0
-                    last_speed = f"{speed_mb:.1f}MB/s" if speed_mb > 0 else ""
-                    if last_speed:
-                        url_iter.set_postfix_str(f"{fname[:20]} {last_speed}")
                 results.append(result)
 
             if len(results) == 1:
