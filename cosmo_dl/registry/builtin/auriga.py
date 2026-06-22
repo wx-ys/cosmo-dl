@@ -4,6 +4,7 @@ The Auriga data is hosted on Globus and requires browser-based login.
 cosmo-dl does not currently support automated Globus authentication.
 Use the links below to browse and download data manually.
 """
+
 from __future__ import annotations
 
 from cosmo_dl.registry.source import SourceNode
@@ -15,8 +16,7 @@ _AURIGA_DESCRIPTION = (
 
 _AURIGA_DATA_PAGE = "https://wwwmpa.mpa-garching.mpg.de/auriga/data.html"
 _AURIGA_DOWNLOAD = (
-    "https://app.globus.org/file-manager"
-    "?origin_id=02a2dbb8-f64d-4440-bafe-44b60b964501"
+    "https://app.globus.org/file-manager?origin_id=02a2dbb8-f64d-4440-bafe-44b60b964501"
 )
 
 

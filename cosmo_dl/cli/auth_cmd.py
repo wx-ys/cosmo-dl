@@ -1,4 +1,5 @@
 """CLI command: auth — manage authentication tokens for data sources."""
+
 from __future__ import annotations
 
 import os

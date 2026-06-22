@@ -5,6 +5,7 @@ directory listing / file access on Globus Connect Server (GCS) endpoints.
 
 No heavy SDK dependency — uses plain ``requests`` and stdlib.
 """
+
 from __future__ import annotations
 
 import base64
@@ -135,7 +136,7 @@ def exchange_code_for_tokens(
     try:
         resp = requests.post(GLOBUS_TOKEN_URL, data=payload, timeout=(10, 30))
         resp.raise_for_status()
-        return resp.json()  # type: ignore[return-value]
+        return resp.json()  # type: ignore[no-any-return]
     except Exception as exc:
         logger.warning("Globus token exchange failed: %s", exc)
         return None
@@ -160,7 +161,7 @@ def refresh_access_token(
     try:
         resp = requests.post(GLOBUS_TOKEN_URL, data=payload, timeout=(10, 30))
         resp.raise_for_status()
-        return resp.json()  # type: ignore[return-value]
+        return resp.json()  # type: ignore[no-any-return]
     except Exception as exc:
         logger.warning("Globus token refresh failed: %s", exc)
         return None
@@ -179,9 +180,13 @@ _SKIP_HREF_PREFIXES = ("#", "?", "javascript:", "mailto:")
 _SKIP_NAMES = {"..", ".", "../", "./"}
 _STRIP_TAGS_RE = re.compile(r"<[^>]*>")
 _SKIP_FILE_NAMES: set[str] = {
-    "index.html", "index.htm", "index.php",
-    "header.html", "footer.html",
-    ".htaccess", ".gitignore",
+    "index.html",
+    "index.htm",
+    "index.php",
+    "header.html",
+    "footer.html",
+    ".htaccess",
+    ".gitignore",
 }
 
 

@@ -1,9 +1,10 @@
 """Integration tests for cosmo-dl end-to-end workflows."""
-import pytest
+
 import responses
 from click.testing import CliRunner
+
+from cosmo_dl.api import download, explore
 from cosmo_dl.cli.main import cli
-from cosmo_dl.api import download, explore, list_sources
 
 
 class TestEndToEndDownload:
@@ -72,6 +73,7 @@ class TestEndToEndDownload:
     def test_registry_resolve_workflow(self):
         """Verify source -> URL resolution works end-to-end."""
         from cosmo_dl.registry.registry import Registry
+
         reg = Registry()
         urls = reg.resolve("FIRE2/core/m12i_res7100/output/snapdir_000")
         assert len(urls) > 0

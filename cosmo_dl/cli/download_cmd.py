@@ -1,4 +1,5 @@
 """CLI command: download."""
+
 from __future__ import annotations
 
 import os
@@ -10,6 +11,7 @@ from rich.console import Console
 from cosmo_dl.api import download as api_download
 from cosmo_dl.api import explore as api_explore
 from cosmo_dl.engine.file_manager import FileManager
+from cosmo_dl.engine.types import DownloadResult
 
 console = Console()
 
@@ -19,25 +21,47 @@ _interrupted = False
 
 @click.command("download")
 @click.argument("target")
-@click.option("-w", "--workers", type=int, default=4,
-              help="Chunk-parallel threads per file (for large files).")
-@click.option("-fw", "--file-workers", type=int, default=4,
-              help="Number of files to download concurrently.")
-@click.option("-l", "--limit", default=None,
-              help="Rate limit (e.g. '500KB/s', '2MB/s').")
-@click.option("-o", "--output", default="./cosmo-dl-downloads",
-              help="Output directory (default: ./cosmo-dl-downloads).")
-@click.option("--resume/--no-resume", default=True,
-              help="Resume partial downloads (default: enabled).")
-@click.option("--hash", "hash_algo", default=None,
-              help="Hash algorithm to verify downloads (e.g. 'md5', 'sha256').")
-@click.option("--recursive/--no-recursive", default=False,
-              help="Recursively explore and download from URL (default: disabled).")
-@click.option("--include", default="*",
-              help="Pattern to include files when recursively exploring (default: '*').")
-def download_cmd(target, workers, file_workers, limit, output, resume,
-                 hash_algo, recursive, include):
+@click.option(
+    "-w",
+    "--workers",
+    type=int,
+    default=4,
+    help="Chunk-parallel threads per file (for large files).",
+)
+@click.option(
+    "-fw", "--file-workers", type=int, default=4, help="Number of files to download concurrently."
+)
+@click.option("-l", "--limit", default=None, help="Rate limit (e.g. '500KB/s', '2MB/s').")
+@click.option(
+    "-o",
+    "--output",
+    default="./cosmo-dl-downloads",
+    help="Output directory (default: ./cosmo-dl-downloads).",
+)
+@click.option(
+    "--resume/--no-resume", default=True, help="Resume partial downloads (default: enabled)."
+)
+@click.option(
+    "--hash",
+    "hash_algo",
+    default=None,
+    help="Hash algorithm to verify downloads (e.g. 'md5', 'sha256').",
+)
+@click.option(
+    "--recursive/--no-recursive",
+    default=False,
+    help="Recursively explore and download from URL (default: disabled).",
+)
+@click.option(
+    "--include",
+    default="*",
+    help="Pattern to include files when recursively exploring (default: '*').",
+)
+def download_cmd(
+    target, workers, file_workers, limit, output, resume, hash_algo, recursive, include
+):
     """Download simulation data from URL or source/dataset."""
+
     # ------------------------------------------------------------------
     # Install a SIGINT handler so a second Ctrl+C hard-exits immediately.
     # Using ``os._exit`` avoids the noisy threading-shutdown traceback
@@ -48,29 +72,25 @@ def download_cmd(target, workers, file_workers, limit, output, resume,
         if _interrupted:
             os._exit(130)
         _interrupted = True
-        console.print(
-            "\n[yellow]Interrupted — waiting for in-flight work to finish...[/yellow]"
-        )
+        console.print("\n[yellow]Interrupted — waiting for in-flight work to finish...[/yellow]")
         console.print("[dim](Press Ctrl+C again to force quit)[/dim]")
 
     original_handler = signal.signal(signal.SIGINT, _on_interrupt)
     try:
-        _do_download(target, workers, file_workers, limit, output, resume,
-                     hash_algo, recursive, include)
+        _do_download(
+            target, workers, file_workers, limit, output, resume, hash_algo, recursive, include
+        )
     except KeyboardInterrupt:
-        console.print(
-            "\n[yellow]Download interrupted.[/yellow]"
-        )
-        console.print(
-            "[dim]Partial progress saved — resume with the same command.[/dim]"
-        )
+        console.print("\n[yellow]Download interrupted.[/yellow]")
+        console.print("[dim]Partial progress saved — resume with the same command.[/dim]")
         os._exit(130)
     finally:
         signal.signal(signal.SIGINT, original_handler)
 
 
-def _do_download(target, workers, file_workers, limit, output, resume,
-                 hash_algo, recursive, include):
+def _do_download(
+    target, workers, file_workers, limit, output, resume, hash_algo, recursive, include
+):
     """Actual download logic, factored out for clean interrupt handling."""
     if recursive and (target.startswith("http://") or target.startswith("https://")):
         console.print(f"[dim]Exploring {target} ...[/dim]")
@@ -80,26 +100,35 @@ def _do_download(target, workers, file_workers, limit, output, resume,
             return
         console.print(f"Found [green]{len(files)}[/green] file(s). Starting download...\n")
         from tqdm import tqdm
+
         succeeded = 0
         failed = 0
         with tqdm(total=len(files), desc="Files", unit="file") as pbar:
             for entry in files:
                 local_path = FileManager.mirror_path(
-                    entry.url, base_url=target, local_root=output,
+                    entry.url,
+                    base_url=target,
+                    local_root=output,
                 )
                 local_path.parent.mkdir(parents=True, exist_ok=True)
                 try:
                     result = api_download(
-                        entry.url, local_path,
-                        workers=workers, file_workers=file_workers,
-                        rate_limit=limit, resume=resume,
+                        entry.url,
+                        local_path,
+                        workers=workers,
+                        file_workers=file_workers,
+                        rate_limit=limit,
+                        resume=resume,
                         expected_hash=hash_algo,
                     )
-                    if result.success:
+                    # When called per-file with a concrete dest, api_download
+                    # always returns a single DownloadResult.
+                    single: DownloadResult = result  # type: ignore[assignment]
+                    if single.success:
                         succeeded += 1
                     else:
                         failed += 1
-                        console.print(f"  [red]FAILED:[/red] {entry.name}: {result.message}")
+                        console.print(f"  [red]FAILED:[/red] {entry.name}: {single.message}")
                 except Exception as e:
                     failed += 1
                     console.print(f"  [red]ERROR:[/red] {entry.name}: {e}")
@@ -107,9 +136,12 @@ def _do_download(target, workers, file_workers, limit, output, resume,
         console.print(f"\nDone. [green]{succeeded}[/green] succeeded, [red]{failed}[/red] failed.")
     else:
         result = api_download(
-            target, output_dir=output,
-            workers=workers, file_workers=file_workers,
-            rate_limit=limit, resume=resume,
+            target,
+            output_dir=output,
+            workers=workers,
+            file_workers=file_workers,
+            rate_limit=limit,
+            resume=resume,
             expected_hash=hash_algo,
         )
         if isinstance(result, list):
@@ -126,10 +158,7 @@ def _print_result(r) -> None:
         speed_str = ""
         if r.speed > 0:
             speed_str = f" @ [cyan]{_fmt_speed(r.speed)}[/cyan]"
-        console.print(
-            f"  [green]✓[/green] {r.local_path}  "
-            f"[dim]({size_str}{speed_str})[/dim]"
-        )
+        console.print(f"  [green]✓[/green] {r.local_path}  [dim]({size_str}{speed_str})[/dim]")
         if r.checksum:
             algo, _, digest = r.checksum.partition(":")
             console.print(f"    [dim]{algo}:[/dim] {digest}")

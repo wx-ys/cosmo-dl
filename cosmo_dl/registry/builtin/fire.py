@@ -21,6 +21,7 @@ No API key required — FIRE-2 data is publicly accessible.
 Each level is loaded lazily with a single HTTP GET to the directory URL.
 HTML directory listings are parsed to discover files and subdirectories.
 """
+
 from __future__ import annotations
 
 import logging
@@ -56,9 +57,13 @@ _STRIP_TAGS_RE = re.compile(r"<[^>]*>")
 
 # File names to skip when scraping (server-generated pages, not data)
 _SKIP_FILE_NAMES: set[str] = {
-    "index.html", "index.htm", "index.php",
-    "header.html", "footer.html",
-    ".htaccess", ".gitignore",
+    "index.html",
+    "index.htm",
+    "index.php",
+    "header.html",
+    "footer.html",
+    ".htaccess",
+    ".gitignore",
 }
 
 # Timeout for directory scraping: (connect, read)

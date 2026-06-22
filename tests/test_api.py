@@ -1,8 +1,8 @@
 """Tests for the public Python API."""
-import pytest
+
 import responses
+
 from cosmo_dl.api import download, explore, list_sources
-from cosmo_dl.registry.source import DatasetInfo
 from cosmo_dl.engine.types import DownloadResult, FileEntry
 
 
@@ -53,8 +53,8 @@ class TestDownload:
         assert dest.read_bytes() == content
 
     def test_download_source_dataset(self, tmp_path):
-        content = b"fire data"
         from cosmo_dl.api import _resolve_target
+
         urls = _resolve_target("FIRE2/core/m12i_res7100/output/snapdir_000")
         assert len(urls) > 0
         assert urls[0].startswith("https://")

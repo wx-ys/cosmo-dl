@@ -1,6 +1,8 @@
 """Tests for registry source types."""
+
 import pytest
-from cosmo_dl.registry.source import SimulationSource, DatasetInfo
+
+from cosmo_dl.registry.source import DatasetInfo, SimulationSource
 
 
 class TestDatasetInfo:

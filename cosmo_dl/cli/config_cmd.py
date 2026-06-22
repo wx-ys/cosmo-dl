@@ -1,4 +1,5 @@
 """CLI command: config — manage cosmo-dl settings."""
+
 from __future__ import annotations
 
 import rich_click as click
@@ -47,6 +48,7 @@ def config_get(key: str) -> None:
         import os
 
         from cosmo_dl.config import _ENV_KEY_MAP, _load_dotenvs, _load_toml
+
         env_var = _ENV_KEY_MAP.get(key, key.upper())
         if os.environ.get(env_var):
             click.echo(f"  (source: environment variable {env_var})")
@@ -82,9 +84,7 @@ def config_show() -> None:
     click.echo(f"{'Key':<25s} {'Value':<30s} {'Source':<20s}")
     click.echo("-" * 75)
 
-    all_keys = sorted(set(
-        list(_ENV_KEY_MAP.keys()) + list(toml_data.keys())
-    ))
+    all_keys = sorted(set(list(_ENV_KEY_MAP.keys()) + list(toml_data.keys())))
 
     for key in all_keys:
         val = get(key)
@@ -108,6 +108,7 @@ def config_show() -> None:
 def config_keys() -> None:
     """List known configuration keys."""
     from cosmo_dl.config import _ENV_KEY_MAP
+
     click.echo("Known configuration keys:")
     for key in list_keys():
         env_var = _ENV_KEY_MAP.get(key, key.upper())

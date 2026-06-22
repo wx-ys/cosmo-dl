@@ -1,7 +1,8 @@
 """Tests for Session."""
-import pytest
+
 import requests
 import responses
+
 from cosmo_dl.engine.session import Session
 from cosmo_dl.engine.types import AuthConfig
 
@@ -73,6 +74,5 @@ class TestSession:
             headers={"Content-Range": "bytes 0-1023/1048576"},
         )
         session = Session()
-        response = session.get("https://example.com/file.hdf5",
-                               headers={"Range": "bytes=0-1023"})
+        response = session.get("https://example.com/file.hdf5", headers={"Range": "bytes=0-1023"})
         assert len(response.content) == 1024

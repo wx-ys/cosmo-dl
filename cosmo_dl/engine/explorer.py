@@ -1,4 +1,5 @@
 """URLExplorer: HTML directory listing + JSON API parser for discovering files at HTTP URLs."""
+
 from __future__ import annotations
 
 import re
@@ -90,18 +91,17 @@ class URLExplorer:
             # Always recurse into sub-directories (if enabled) so we can
             # discover files nested beneath directories that may not
             # themselves match the filter.
-            if entry.type == "dir" and recursive:
-                if max_depth is None or max_depth > 0:
-                    next_depth = None if max_depth is None else max_depth - 1
-                    result.extend(
-                        self.explore(
-                            entry.url,
-                            recursive=True,
-                            max_depth=next_depth,
-                            include=include,
-                            exclude=exclude,
-                        )
+            if entry.type == "dir" and recursive and (max_depth is None or max_depth > 0):
+                next_depth = None if max_depth is None else max_depth - 1
+                result.extend(
+                    self.explore(
+                        entry.url,
+                        recursive=True,
+                        max_depth=next_depth,
+                        include=include,
+                        exclude=exclude,
                     )
+                )
 
             if self._matches_filter(entry.name, include, exclude):
                 result.append(entry)
@@ -127,7 +127,7 @@ class URLExplorer:
 
             ct = resp.headers.get("content-type", "")
             if "json" in ct:
-                return resp.json()
+                return resp.json()  # type: ignore[no-any-return]
             return resp.text
         except Exception:
             return None
@@ -226,6 +226,4 @@ class URLExplorer:
         """Return ``True`` if *name* satisfies the include/exclude globs."""
         if not fnmatch(name, include):
             return False
-        if exclude is not None and fnmatch(name, exclude):
-            return False
-        return True
+        return not (exclude is not None and fnmatch(name, exclude))

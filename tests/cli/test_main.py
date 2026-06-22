@@ -1,5 +1,7 @@
 """Tests for CLI."""
+
 from click.testing import CliRunner
+
 from cosmo_dl.cli.main import cli
 
 

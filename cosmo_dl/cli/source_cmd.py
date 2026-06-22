@@ -1,4 +1,5 @@
 """CLI command: source — browse the simulation source tree."""
+
 from __future__ import annotations
 
 import rich_click as click
@@ -207,9 +208,7 @@ def source_info(path: str) -> None:
 
     if node.auth is not None:
         auth = node.auth
-        console.print(
-            f"[bold]Auth:[/bold]        {auth.type if hasattr(auth, 'type') else 'yes'}"
-        )
+        console.print(f"[bold]Auth:[/bold]        {auth.type if hasattr(auth, 'type') else 'yes'}")
 
     children = node.list_children()
     if children:
@@ -245,14 +244,12 @@ def source_discover(path: str) -> None:
 
     if node.is_loaded():
         console.print(
-            f"{path}/ is already loaded "
-            f"([dim]{len(node.list_children())} children[/dim])."
+            f"{path}/ is already loaded ([dim]{len(node.list_children())} children[/dim])."
         )
         return
 
     console.print(f"Loading [bold]{path}/[/bold] ...")
     children = node.list_children()
     console.print(
-        f"Loaded [green]{len(children)}[/green] child(ren). "
-        f"[dim]Loaded: {node.is_loaded()}[/dim]"
+        f"Loaded [green]{len(children)}[/green] child(ren). [dim]Loaded: {node.is_loaded()}[/dim]"
     )

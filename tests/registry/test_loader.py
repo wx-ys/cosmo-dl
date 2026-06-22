@@ -1,9 +1,9 @@
 """Tests for YAML source loader."""
+
 import os
 import tempfile
-import pytest
-from cosmo_dl.registry.loader import load_sources_from_yaml
 
+from cosmo_dl.registry.loader import load_sources_from_yaml
 
 SAMPLE_YAML = """
 sources:
@@ -25,9 +25,7 @@ sources:
 
 class TestLoadSourcesFromYaml:
     def test_load_valid_yaml(self):
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".yaml", delete=False
-        ) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
             f.write(SAMPLE_YAML)
             f.flush()
             sources = load_sources_from_yaml(f.name)
@@ -41,9 +39,7 @@ class TestLoadSourcesFromYaml:
         assert "snap-100" in src.datasets
 
     def test_load_expands_urls(self):
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".yaml", delete=False
-        ) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
             f.write(SAMPLE_YAML)
             f.flush()
             sources = load_sources_from_yaml(f.name)
@@ -67,9 +63,7 @@ sources:
       username: ${TEST_USER}
       password: ${TEST_PASS}
 """
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".yaml", delete=False
-        ) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
             f.write(yaml_content)
             f.flush()
             sources = load_sources_from_yaml(f.name)
@@ -78,9 +72,7 @@ sources:
         assert sources[0].auth.password == "envpass"
 
     def test_load_empty_yaml(self):
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".yaml", delete=False
-        ) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
             f.write("sources: {}\n")
             f.flush()
             sources = load_sources_from_yaml(f.name)

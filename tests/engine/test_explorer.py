@@ -1,8 +1,8 @@
 """Tests for URLExplorer."""
-import pytest
-import responses
-from cosmo_dl.engine.explorer import URLExplorer, FileEntry
 
+import responses
+
+from cosmo_dl.engine.explorer import FileEntry, URLExplorer
 
 APACHE_LISTING = """
 <!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 3.2 Final//EN">
@@ -102,8 +102,7 @@ class TestExplorerFilter:
             headers={"Content-Type": "text/html"},
         )
         explorer = URLExplorer()
-        result = explorer.explore("https://host/data/", recursive=False,
-                                  include="*.hdf5")
+        result = explorer.explore("https://host/data/", recursive=False, include="*.hdf5")
         names = {e.name for e in result}
         assert "snapshot_127.0.hdf5" in names
         assert "README.txt" not in names
@@ -117,8 +116,7 @@ class TestExplorerFilter:
             headers={"Content-Type": "text/html"},
         )
         explorer = URLExplorer()
-        result = explorer.explore("https://host/data/", recursive=False,
-                                  exclude="*.txt")
+        result = explorer.explore("https://host/data/", recursive=False, exclude="*.txt")
         names = {e.name for e in result}
         assert "README.txt" not in names
         assert "snapshot_127.0.hdf5" in names

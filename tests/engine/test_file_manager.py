@@ -1,9 +1,11 @@
 """Tests for FileManager."""
+
 import hashlib
 import os
-import tempfile
 from pathlib import Path
+
 import pytest
+
 from cosmo_dl.engine.file_manager import FileManager
 
 

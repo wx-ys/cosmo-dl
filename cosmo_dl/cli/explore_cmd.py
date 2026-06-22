@@ -1,4 +1,5 @@
 """CLI command: explore."""
+
 import rich_click as click
 
 from cosmo_dl.api import explore as api_explore
@@ -6,19 +7,23 @@ from cosmo_dl.api import explore as api_explore
 
 @click.command("explore")
 @click.argument("url")
-@click.option("--recursive/--no-recursive", default=True,
-              help="Recursively explore sub-directories (default: enabled).")
-@click.option("--depth", type=int, default=None,
-              help="Maximum depth for recursive exploration (default: unlimited).")
-@click.option("--include", default="*",
-              help="Pattern to include files (default: '*').")
-@click.option("--exclude", default=None,
-              help="Pattern to exclude files (default: none).")
+@click.option(
+    "--recursive/--no-recursive",
+    default=True,
+    help="Recursively explore sub-directories (default: enabled).",
+)
+@click.option(
+    "--depth",
+    type=int,
+    default=None,
+    help="Maximum depth for recursive exploration (default: unlimited).",
+)
+@click.option("--include", default="*", help="Pattern to include files (default: '*').")
+@click.option("--exclude", default=None, help="Pattern to exclude files (default: none).")
 def explore_cmd(url, recursive, depth, include, exclude):
     """List files available at a URL."""
     click.echo(f"Exploring {url} ...")
-    files = api_explore(url, recursive=recursive, max_depth=depth,
-                        include=include, exclude=exclude)
+    files = api_explore(url, recursive=recursive, max_depth=depth, include=include, exclude=exclude)
     if not files:
         click.echo("No files found.")
         return
@@ -29,6 +34,7 @@ def explore_cmd(url, recursive, depth, include, exclude):
         click.echo(f"  {size_str:>10s}  {f.name}")
     if total_size > 0:
         click.echo(f"\nTotal: {_format_size(total_size)}")
+
 
 def _format_size(size):
     for unit in ("B", "KB", "MB", "GB", "TB"):

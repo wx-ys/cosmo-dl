@@ -14,7 +14,7 @@ repos:
     rev: v0.11.0
     hooks:
       - id: ruff
-        args: ["check", "--fix"]
+        args: ["--fix"]
       - id: ruff-format
 
   - repo: https://github.com/pre-commit/mirrors-mypy
@@ -26,3 +26,4 @@ repos:
           - types-PyYAML
           - types-tqdm
         args: ["--ignore-missing-imports"]
+        exclude: ^tests/

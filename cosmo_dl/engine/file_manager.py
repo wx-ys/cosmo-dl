@@ -1,4 +1,5 @@
 """FileManager: mirror path construction, integrity checks, and partial-size queries."""
+
 import hashlib
 import os
 from pathlib import Path
@@ -20,7 +21,7 @@ class FileManager:
         if not url.startswith(normalized_base):
             raise ValueError(f"URL {url!r} is not under base URL {base_url!r}")
 
-        relative = url[len(normalized_base):]
+        relative = url[len(normalized_base) :]
 
         if local_root is None:
             local_root = os.path.join(os.getcwd(), "cosmo-dl-downloads")
@@ -56,15 +57,12 @@ class FileManager:
         if not path.is_file():
             return False
 
-        if expected_size is not None:
-            if path.stat().st_size != expected_size:
-                return False
+        if expected_size is not None and path.stat().st_size != expected_size:
+            return False
 
         if expected_hash is not None:
             if ":" not in expected_hash:
-                raise ValueError(
-                    f"Malformed hash spec {expected_hash!r}; expected algo:hexdigest"
-                )
+                raise ValueError(f"Malformed hash spec {expected_hash!r}; expected algo:hexdigest")
 
             algo, _, digest = expected_hash.partition(":")
 

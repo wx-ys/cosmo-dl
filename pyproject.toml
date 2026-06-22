@@ -59,6 +59,7 @@ select = [
 ignore = [
     "E501",   # line-too-long (handled by formatter)
     "B008",   # do-not-perform-function-calls-in-argument-defaults
+    "UP038",  # Use 'X | Y' in 'isinstance' instead of '(X, Y)'
 ]
 
 [tool.ruff.lint.isort]

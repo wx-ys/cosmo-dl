@@ -7,6 +7,7 @@ Reads settings from multiple sources with this priority (highest first):
 3. Config file (``~/.config/cosmo-dl/config.toml``)
 4. Built-in defaults
 """
+
 from __future__ import annotations
 
 import json
@@ -34,6 +35,7 @@ _ENV_KEY_MAP: dict[str, str] = {
 # ---------------------------------------------------------------------------
 # .env file loading
 # ---------------------------------------------------------------------------
+
 
 def _parse_dotenv(path: Path) -> dict[str, str]:
     """Parse a .env file into a dict, skipping comments and blank lines."""
@@ -73,6 +75,7 @@ def _load_dotenvs() -> dict[str, str]:
 # TOML config file
 # ---------------------------------------------------------------------------
 
+
 def _load_toml() -> dict[str, object]:
     """Load the TOML config file, returning empty dict if not found or empty."""
     if not CONFIG_FILE.is_file():
@@ -110,6 +113,7 @@ def _save_toml(data: dict[str, object]) -> None:
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
+
 
 def get(key: str, default: str = "") -> str:
     """Get a configuration value.
@@ -178,7 +182,7 @@ def show() -> dict[str, str]:
 
     # Collect from all sources
     toml_data = _load_toml()
-    dotenv = _load_dotenvs()
+    _load_dotenvs()  # side-effect: populates os.environ for resolution
 
     all_keys: set[str] = set()
     all_keys.update(_ENV_KEY_MAP.keys())

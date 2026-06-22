@@ -1,4 +1,5 @@
 """Core types for the cosmo-dl engine."""
+
 from dataclasses import dataclass, field
 from typing import Literal
 
@@ -6,6 +7,7 @@ from typing import Literal
 @dataclass(slots=True)
 class DownloadResult:
     """Result of a single file download."""
+
     url: str
     local_path: str
     size: int
@@ -19,6 +21,7 @@ class DownloadResult:
 @dataclass(slots=True)
 class FileEntry:
     """Represents a file or directory discovered at a URL."""
+
     url: str
     name: str
     size: int | None = None

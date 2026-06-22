@@ -1,4 +1,5 @@
 """Built-in simulation source definitions."""
+
 from cosmo_dl.registry.builtin.auriga import build_auriga_root
 from cosmo_dl.registry.builtin.eagle import build_eagle_root
 from cosmo_dl.registry.builtin.fire import build_fire2_root

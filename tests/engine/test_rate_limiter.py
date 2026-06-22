@@ -1,6 +1,7 @@
 """Tests for RateLimiter."""
-import time
+
 import pytest
+
 from cosmo_dl.engine.rate_limiter import RateLimiter
 
 

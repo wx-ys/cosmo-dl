@@ -1,10 +1,12 @@
 """HTTP session manager wrapping requests.Session with auth, retry, and proxy support."""
+
 from __future__ import annotations
 
+import contextlib
 import http.cookiejar
 import logging
 import time
-from typing import Any, ContextManager
+from typing import Any
 from urllib.parse import urlparse
 
 import requests
@@ -133,8 +135,9 @@ class Session:
 
             if auth.type == "basic" and auth.username is not None and auth.password is not None:
                 # requests handles BasicAuth via the session's .auth attribute
-                self._requests_auth: requests.auth.AuthBase | None = \
-                    requests.auth.HTTPBasicAuth(auth.username, auth.password)
+                self._requests_auth: requests.auth.AuthBase | None = requests.auth.HTTPBasicAuth(
+                    auth.username, auth.password
+                )
             else:
                 self._requests_auth = None
 
@@ -144,10 +147,8 @@ class Session:
                 extra_headers["api-key"] = auth.token
             elif auth.type == "cookie" and auth.cookie_file is not None:
                 cj = http.cookiejar.MozillaCookieJar()
-                try:
+                with contextlib.suppress(FileNotFoundError):
                     cj.load(auth.cookie_file, ignore_discard=True, ignore_expires=True)
-                except FileNotFoundError:
-                    pass
                 extra_cookies = cj
 
             elif auth.type == "oauth2":
@@ -186,7 +187,7 @@ class Session:
             elif isinstance(merged_cookies, http.cookiejar.CookieJar):
                 self._client.cookies = merged_cookies  # type: ignore[assignment]
 
-        if hasattr(self, '_requests_auth') and self._requests_auth is not None:
+        if hasattr(self, "_requests_auth") and self._requests_auth is not None:
             self._client.auth = self._requests_auth
 
         # Set up retry adapter
@@ -194,19 +195,19 @@ class Session:
             total=retry,
             backoff_factor=retry_backoff,
             status_forcelist=(429, 500, 502, 503, 504),
-            allowed_methods=frozenset(['GET', 'HEAD', 'OPTIONS']),
+            allowed_methods=frozenset(["GET", "HEAD", "OPTIONS"]),
         )
         adapter = HTTPAdapter(
             max_retries=retry_strategy,
             pool_connections=100,
             pool_maxsize=100,
         )
-        self._client.mount('http://', adapter)
-        self._client.mount('https://', adapter)
+        self._client.mount("http://", adapter)
+        self._client.mount("https://", adapter)
 
         # Proxy
         if proxy:
-            self._client.proxies.update({'http': proxy, 'https': proxy})
+            self._client.proxies.update({"http": proxy, "https": proxy})
 
     @property
     def client(self) -> requests.Session:
@@ -216,16 +217,16 @@ class Session:
     def head(self, url: str, **kwargs: Any) -> requests.Response:
         """Send a HEAD request."""
         self._ensure_fresh_token()
-        kwargs.setdefault('timeout', self._timeout)
+        kwargs.setdefault("timeout", self._timeout)
         return self._client.head(url, **kwargs)
 
     def get(self, url: str, **kwargs: Any) -> requests.Response:
         """Send a GET request."""
         self._ensure_fresh_token()
-        kwargs.setdefault('timeout', self._timeout)
+        kwargs.setdefault("timeout", self._timeout)
         return self._client.get(url, **kwargs)
 
-    def stream(self, url: str, **kwargs: Any) -> ContextManager[StreamResponse]:
+    def stream(self, url: str, **kwargs: Any) -> contextlib.AbstractContextManager[StreamResponse]:
         """Send a GET request with streaming enabled.
 
         Returns a context manager yielding a :class:`StreamResponse` that
@@ -233,9 +234,9 @@ class Session:
         ``iter_bytes(chunk_size)`` — compatible with the old httpx-based API.
         """
         self._ensure_fresh_token()
-        kwargs.setdefault('timeout', self._timeout)
+        kwargs.setdefault("timeout", self._timeout)
         # Pop any 'method' kwarg (httpx compatibility)
-        kwargs.pop('method', None)
+        kwargs.pop("method", None)
         resp = self._client.get(url, stream=True, **kwargs)
         return StreamResponse(resp)
 
@@ -250,12 +251,13 @@ class Session:
             return
         try:
             from cosmo_dl.config import get_token
+
             stored = get_token(auth.source_name)
             if stored:
                 auth.refresh_token = str(stored.get("refresh_token", "")) or None
                 auth.access_token = str(stored.get("access_token", "")) or None
                 expiry = stored.get("token_expiry")
-                auth.token_expiry = float(expiry) if expiry is not None else None
+                auth.token_expiry = float(expiry) if expiry is not None else None  # type: ignore[arg-type]
         except Exception as exc:
             logger.debug("Failed to load OAuth2 tokens: %s", exc)
 
@@ -266,11 +268,15 @@ class Session:
             return
         try:
             from cosmo_dl.config import save_token
-            save_token(auth.source_name, {
-                "refresh_token": auth.refresh_token,
-                "access_token": auth.access_token,
-                "token_expiry": auth.token_expiry,
-            })
+
+            save_token(
+                auth.source_name,
+                {
+                    "refresh_token": auth.refresh_token,
+                    "access_token": auth.access_token,
+                    "token_expiry": auth.token_expiry,
+                },
+            )
         except Exception as exc:
             logger.debug("Failed to persist OAuth2 tokens: %s", exc)
 

@@ -1,6 +1,8 @@
 """Core download engine with resume, multi-threading, rate limiting, and integrity."""
+
 from __future__ import annotations
 
+import contextlib
 import email.utils
 import json
 import logging
@@ -43,6 +45,7 @@ def _is_sparse_file(filepath: Path) -> bool:
     except Exception:
         return False
 
+
 # Pattern for Content-Disposition filename extraction (RFC 6266 / RFC 5987)
 _CD_FILENAME_RE = re.compile(
     r"""filename\*?=(?:UTF-8''([^;]*)|"([^"]*)"|'([^']*)'|([^;]*))\s*;?""",
@@ -63,14 +66,14 @@ def _parse_content_disposition(header: str) -> str | None:
             if group:
                 return group.strip()
     # Fallback: simple split
-    if 'filename=' in header.lower():
-        idx = header.lower().find('filename=')
+    if "filename=" in header.lower():
+        idx = header.lower().find("filename=")
         if idx >= 0:
-            rest = header[idx + 9:]  # skip "filename="
-            if header[idx + 8] == '*':
-                rest = rest.split("''", 1)
-                rest = rest[1] if len(rest) > 1 else rest[0]
-            rest = rest.strip().split(';', 1)[0].strip()
+            rest = header[idx + 9 :]  # skip "filename="
+            if header[idx + 8] == "*":
+                parts = rest.split("''", 1)
+                rest = parts[1] if len(parts) > 1 else parts[0]
+            rest = rest.strip().split(";", 1)[0].strip()
             if rest and rest[0] in ('"', "'") and rest[-1] == rest[0]:
                 rest = rest[1:-1]
             if rest:
@@ -275,10 +278,7 @@ class Downloader:
                     if meta_path.is_file():
                         # A .part.meta sidecar exists — let _download_multi
                         # figure out which chunks are already done.
-                        logger.debug(
-                            "Found chunk-resume metadata; "
-                            "will resume completed chunks."
-                        )
+                        logger.debug("Found chunk-resume metadata; will resume completed chunks.")
                     elif partial_size > 0 and _is_sparse_file(part_path):
                         # No sidecar + sparse file = stale pre-allocation
                         # from an interrupted download that wrote no meta.
@@ -296,8 +296,7 @@ class Downloader:
                     # _download_multi into skipping chunks.
                     if meta_path.is_file():
                         logger.debug(
-                            "Removing orphaned chunk-resume metadata "
-                            "(part file no longer exists)."
+                            "Removing orphaned chunk-resume metadata (part file no longer exists)."
                         )
                         self._delete_chunk_meta(part_path)
                     if dest.is_file() and dest.stat().st_size > 0:
@@ -310,7 +309,9 @@ class Downloader:
             # and multi-threading is requested, a follow-up stream GET +
             # Range probe fills in any missing CD / Last-Modified headers.
             metadata = self._gather_metadata(
-                session, url, fallback_get=False,
+                session,
+                url,
+                fallback_get=False,
             )
 
             # When Content-Length is known, multi-threaded downloads can
@@ -319,7 +320,9 @@ class Downloader:
             # Last-Modified if HEAD did not provide them.
             if metadata.total > 0 and workers > 1:
                 metadata = self._gather_metadata(
-                    session, url, fallback_get=True,
+                    session,
+                    url,
+                    fallback_get=True,
                 )
             elif metadata.total <= 0 and workers > 1:
                 logger.warning(
@@ -351,7 +354,10 @@ class Downloader:
                 )
 
                 pc_result = self._check_partial_complete(
-                    part_path, dest, partial_size, metadata.total,
+                    part_path,
+                    dest,
+                    partial_size,
+                    metadata.total,
                 )
                 if pc_result is not None:
                     total_downloaded, final_dest = pc_result
@@ -412,29 +418,25 @@ class Downloader:
                         expected_hash=expected_hash,
                     ):
                         raise ValueError(
-                            "Integrity check failed: "
-                            f"hash does not match {expected_hash}"
+                            f"Integrity check failed: hash does not match {expected_hash}"
                         )
                     checksum = expected_hash
                 else:
                     # Algorithm name only — compute the hash for display
                     try:
                         digest = FileManager._hash_file(
-                            final_dest, expected_hash,
+                            final_dest,
+                            expected_hash,
                         )
                         checksum = f"{expected_hash}:{digest}"
                     except ValueError as exc:
-                        raise ValueError(
-                            f"Unknown hash algorithm: {expected_hash}"
-                        ) from exc
+                        raise ValueError(f"Unknown hash algorithm: {expected_hash}") from exc
 
-            elif expected_size is not None:
-                if not FileManager.check_integrity(
-                    final_dest, expected_size=expected_size,
-                ):
-                    raise ValueError(
-                        "Integrity check failed: size does not match"
-                    )
+            elif expected_size is not None and not FileManager.check_integrity(
+                final_dest,
+                expected_size=expected_size,
+            ):
+                raise ValueError("Integrity check failed: size does not match")
 
             elapsed = time.monotonic() - start_time
             return DownloadResult(
@@ -527,8 +529,8 @@ class Downloader:
         # ------------------------------------------------------------------
         # Determine which follow-up probes are needed
         # ------------------------------------------------------------------
-        need_stream_get = (total <= 0)                        # Phase 2
-        need_range = (cd_filename is None or last_modified is None)  # Phase 3
+        need_stream_get = total <= 0  # Phase 2
+        need_range = cd_filename is None or last_modified is None  # Phase 3
 
         def _stream_get_probe():
             """Phase 2: stream GET to learn total size (and incidentally
@@ -540,15 +542,11 @@ class Downloader:
                     cl = resp.headers.get("Content-Length")
                     cr = resp.headers.get("Content-Range")
                     if cr is not None:
-                        try:
+                        with contextlib.suppress(ValueError, IndexError):
                             result["total"] = int(cr.rsplit("/", 1)[-1])
-                        except (ValueError, IndexError):
-                            pass
                     if result["total"] <= 0 and cl is not None:
                         result["total"] = int(cl)
-                    cd = _parse_content_disposition(
-                        resp.headers.get("Content-Disposition", "")
-                    )
+                    cd = _parse_content_disposition(resp.headers.get("Content-Disposition", ""))
                     if cd:
                         result["cd_filename"] = cd
                     lm = resp.headers.get("Last-Modified")
@@ -564,12 +562,11 @@ class Downloader:
             result: dict = {}
             try:
                 with session.stream(
-                    url, headers={"Range": "bytes=0-0"},
+                    url,
+                    headers={"Range": "bytes=0-0"},
                 ) as probe:
                     probe.raise_for_status()
-                    cd = _parse_content_disposition(
-                        probe.headers.get("Content-Disposition", "")
-                    )
+                    cd = _parse_content_disposition(probe.headers.get("Content-Disposition", ""))
                     if cd:
                         result["cd_filename"] = cd
                     lm = probe.headers.get("Last-Modified")
@@ -593,14 +590,10 @@ class Downloader:
             if stream_result["total"] > 0:
                 total = stream_result["total"]
             if cd_filename is None:
-                cd_filename = (
-                    stream_result.get("cd_filename")
-                    or range_result.get("cd_filename")
-                )
+                cd_filename = stream_result.get("cd_filename") or range_result.get("cd_filename")
             if last_modified is None:
-                last_modified = (
-                    stream_result.get("last_modified")
-                    or range_result.get("last_modified")
+                last_modified = stream_result.get("last_modified") or range_result.get(
+                    "last_modified"
                 )
 
         elif need_stream_get:
@@ -623,8 +616,7 @@ class Downloader:
 
         if total <= 0:
             logger.warning(
-                "Server did not provide Content-Length; "
-                "falling back to single-threaded download"
+                "Server did not provide Content-Length; falling back to single-threaded download"
             )
 
         return _Metadata(
@@ -670,16 +662,19 @@ class Downloader:
         """
         if total <= 0:
             return
-        if dest.is_file() and dest.stat().st_size == total:
-            if FileManager.check_integrity(
+        if (
+            dest.is_file()
+            and dest.stat().st_size == total
+            and FileManager.check_integrity(
                 dest,
                 expected_size=expected_size,
                 expected_hash=expected_hash,
-            ):
-                if partial_size > 0 and part_path.is_file():
-                    part_path.unlink()
-                elapsed = time.monotonic() - start_time
-                raise _AlreadyDownloaded(total, elapsed, dest)
+            )
+        ):
+            if partial_size > 0 and part_path.is_file():
+                part_path.unlink()
+            elapsed = time.monotonic() - start_time
+            raise _AlreadyDownloaded(total, elapsed, dest)
 
     @classmethod
     def _check_partial_complete(
@@ -707,9 +702,7 @@ class Downloader:
         if meta is not None and meta.get("total") == total:
             # Multi-threaded: check that all chunks are recorded
             all_chunks = cls._calculate_chunks(total, 4)
-            completed = {
-                (s, e) for (s, e) in meta.get("completed", [])
-            }
+            completed = {(s, e) for (s, e) in meta.get("completed", [])}
             if len(completed) >= len(all_chunks):
                 os.replace(part_path, dest)
                 cls._delete_chunk_meta(part_path)
@@ -723,7 +716,8 @@ class Downloader:
 
     @staticmethod
     def _calculate_chunks(
-        total: int, workers: int,
+        total: int,
+        workers: int,
     ) -> list[tuple[int, int, int]]:
         """Compute byte-range boundaries for parallel download.
 
@@ -734,14 +728,14 @@ class Downloader:
         # Target ~200 MiB per chunk → ~18 s per chunk at 11 MiB/s
         target_mb = 200 * MB
         num_chunks = max(
-            workers * 4,                              # at least this many
-            (total + target_mb - 1) // target_mb,     # enough to hit target size
+            workers * 4,  # at least this many
+            (total + target_mb - 1) // target_mb,  # enough to hit target size
         )
         # Cap to avoid excessive HTTP Range requests
         num_chunks = min(num_chunks, 1024)
 
         actual_chunk_size = (total + num_chunks - 1) // num_chunks
-        actual_chunk_size = max(MB, actual_chunk_size)   # floor: 1 MiB
+        actual_chunk_size = max(MB, actual_chunk_size)  # floor: 1 MiB
 
         chunks: list[tuple[int, int, int]] = []
         for i in range(num_chunks):
@@ -782,15 +776,15 @@ class Downloader:
         except (json.JSONDecodeError, OSError):
             pass
         # Corrupt meta → discard
-        try:
+        with contextlib.suppress(OSError):
             meta_path.unlink(missing_ok=True)
-        except OSError:
-            pass
         return None
 
     @staticmethod
     def _save_chunk_meta(
-        part_path: Path, total: int, completed: list[tuple[int, int]],
+        part_path: Path,
+        total: int,
+        completed: list[tuple[int, int]],
     ) -> None:
         """Write (or update) the chunk-resume sidecar file."""
         meta_path = Downloader._meta_path(part_path)
@@ -802,10 +796,8 @@ class Downloader:
     @staticmethod
     def _delete_chunk_meta(part_path: Path) -> None:
         """Remove the chunk-resume sidecar after a successful download."""
-        try:
+        with contextlib.suppress(OSError):
             Downloader._meta_path(part_path).unlink(missing_ok=True)
-        except OSError:
-            pass
 
     @staticmethod
     def _finalize_download(
@@ -860,10 +852,8 @@ class Downloader:
             if total <= 0:
                 cr = resp.headers.get("Content-Range")
                 if cr is not None:
-                    try:
+                    with contextlib.suppress(ValueError, IndexError):
                         total = int(cr.rsplit("/", 1)[-1])
-                    except (ValueError, IndexError):
-                        pass
                 if total <= 0:
                     cl = resp.headers.get("Content-Length")
                     if cl is not None:
@@ -875,9 +865,7 @@ class Downloader:
             #   1. Real-name file exists & complete → fix mtime, skip
             #   2. Real-name file exists, mtime wrong   → fix mtime, skip
             #   3. URL-name file exists, real-name doesn't → rename + fix mtime, skip
-            cd_filename = _parse_content_disposition(
-                resp.headers.get("Content-Disposition", "")
-            )
+            cd_filename = _parse_content_disposition(resp.headers.get("Content-Disposition", ""))
             resp_last_modified = resp.headers.get("Last-Modified")
             if cd_filename:
                 real_dest = dest.parent / cd_filename
@@ -895,17 +883,21 @@ class Downloader:
 
                 # Scenario 3: URL-derived name exists, real name doesn't.
                 # Rename the local file instead of re-downloading.
-                if real_dest != dest:
-                    if total > 0 and dest.is_file() and dest.stat().st_size == total:
-                        os.replace(dest, real_dest)
-                        _apply_last_modified(
-                            real_dest,
-                            resp_last_modified or metadata.last_modified,
-                        )
-                        if part_path.is_file():
-                            part_path.unlink()
-                        elapsed = time.monotonic() - start_time if start_time else 0
-                        raise _AlreadyDownloaded(total, elapsed, real_dest)
+                if (
+                    real_dest != dest
+                    and total > 0
+                    and dest.is_file()
+                    and dest.stat().st_size == total
+                ):
+                    os.replace(dest, real_dest)
+                    _apply_last_modified(
+                        real_dest,
+                        resp_last_modified or metadata.last_modified,
+                    )
+                    if part_path.is_file():
+                        part_path.unlink()
+                    elapsed = time.monotonic() - start_time if start_time else 0
+                    raise _AlreadyDownloaded(total, elapsed, real_dest)
 
                 dest = real_dest
 
@@ -927,10 +919,8 @@ class Downloader:
         # Preserve Last-Modified from the actual download response when
         # available (it takes precedence over the metadata probe).
         last_modified: str | None = None
-        if hasattr(resp, 'headers'):
-            last_modified = (
-                resp.headers.get("Last-Modified") or metadata.last_modified
-            )
+        if hasattr(resp, "headers"):
+            last_modified = resp.headers.get("Last-Modified") or metadata.last_modified
         else:
             last_modified = metadata.last_modified
 
@@ -968,12 +958,12 @@ class Downloader:
         completed_ranges: list[tuple[int, int]] = []
         if meta is not None and meta.get("total") == total:
             completed_ranges = [
-                (s, e) for (s, e) in meta["completed"]
-                if isinstance(s, int) and isinstance(e, int)
+                (s, e) for (s, e) in meta["completed"] if isinstance(s, int) and isinstance(e, int)
             ]
             logger.info(
                 "Resuming multi-threaded download: %d/%d chunks already done.",
-                len(completed_ranges), 0,
+                len(completed_ranges),
+                0,
             )
 
         # -- If all chunks are done, finalize immediately --------------------
@@ -984,9 +974,7 @@ class Downloader:
             return total, dest
 
         # -- Determine which chunks still need downloading -------------------
-        completed_set: set[tuple[int, int]] = {
-            (s, e) for (s, e) in completed_ranges
-        }
+        completed_set: set[tuple[int, int]] = {(s, e) for (s, e) in completed_ranges}
         pending_chunks = [
             (idx, start, end)
             for (idx, start, end) in all_chunks
@@ -1002,14 +990,13 @@ class Downloader:
 
         # -- Pre-allocate / open the .part file -----------------------------
         logger.info(
-            "Pre-allocating %.1f GiB for multi-threaded download "
-            "(%d chunks × %d workers).",
-            total / (1024 ** 3), len(pending_chunks), workers,
+            "Pre-allocating %.1f GiB for multi-threaded download (%d chunks × %d workers).",
+            total / (1024**3),
+            len(pending_chunks),
+            workers,
         )
         # Count bytes already downloaded from the completed ranges
-        completed_bytes = sum(
-            (e - s + 1) for (s, e) in completed_ranges
-        )
+        completed_bytes = sum((e - s + 1) for (s, e) in completed_ranges)
 
         with open(part_path, "w+b") as fh:
             fh.truncate(total)
@@ -1045,7 +1032,8 @@ class Downloader:
 
             if progress is not None:
                 _progress_thread = threading.Thread(
-                    target=_poll_progress, daemon=True,
+                    target=_poll_progress,
+                    daemon=True,
                 )
                 _progress_thread.start()
 
@@ -1062,8 +1050,14 @@ class Downloader:
                         for idx, start, end in pending_chunks:
                             fut = executor.submit(
                                 _fetch_chunk,
-                                session, url, chunk_size,
-                                idx, start, end, limiter, _on_read,
+                                session,
+                                url,
+                                chunk_size,
+                                idx,
+                                start,
+                                end,
+                                limiter,
+                                _on_read,
                             )
                             future_map[fut] = (idx, start, end)
 

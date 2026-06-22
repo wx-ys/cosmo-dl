@@ -1,4 +1,5 @@
 """CLI entry point for cosmo-dl."""
+
 import rich_click as click
 
 from cosmo_dl.cli.auth_cmd import auth_cmd
@@ -13,6 +14,7 @@ from cosmo_dl.cli.source_cmd import source_cmd
 def cli() -> None:
     """cosmo-dl — Download cosmological simulation data."""
     pass
+
 
 cli.add_command(auth_cmd)
 cli.add_command(config_cmd)

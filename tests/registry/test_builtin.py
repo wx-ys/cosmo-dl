@@ -1,9 +1,9 @@
 """Tests for built-in simulation sources."""
+
 import pytest
 
 from cosmo_dl.registry.builtin import get_builtin_roots, get_builtin_sources
-from cosmo_dl.registry.source import SimulationSource, SourceNode
-
+from cosmo_dl.registry.source import SourceNode
 
 # ---------------------------------------------------------------------------
 # Legacy API tests
@@ -222,9 +222,7 @@ def test_fire2_output_contains_files():
     # Navigate into one snapdir — should contain .hdf5 chunk files
     first_snapdir = snapdirs[0]
     chunk_children = first_snapdir.list_children()
-    dataset_count = sum(
-        1 for c in chunk_children.values() if c.node_type == "dataset"
-    )
+    dataset_count = sum(1 for c in chunk_children.values() if c.node_type == "dataset")
     assert dataset_count > 0, "snapdir/ should contain dataset files (.hdf5 chunks)"
 
 
@@ -253,9 +251,7 @@ def test_fire2_suite_has_descriptions():
     # Core suite should have a description from our known-suite map
     if "core" in children:
         core = children["core"]
-        assert len(core.description) > 20, (
-            f"Core suite description too short: {core.description!r}"
-        )
+        assert len(core.description) > 20, f"Core suite description too short: {core.description!r}"
         assert "z = 0" in core.description or "z=0" in core.description
 
 
@@ -308,6 +304,7 @@ def test_build_fire2_root_offline_structure():
     """build_fire2_root() should return a correctly-shaped node even before
     any network calls."""
     from cosmo_dl.registry.builtin.fire import build_fire2_root
+
     root = build_fire2_root()
     assert root.name == "FIRE2"
     assert root.node_type == "group"
@@ -352,6 +349,7 @@ def test_fire2_scrape_with_mock(monkeypatch):
     monkeypatch.setattr(req_mod, "get", mock_get)
 
     from cosmo_dl.registry.builtin.fire import build_fire2_root
+
     root = build_fire2_root()
     children = root.list_children()
 
@@ -430,6 +428,7 @@ def test_fire2_scrape_nested_dirs(monkeypatch):
     monkeypatch.setattr(req_mod, "get", mock_get)
 
     from cosmo_dl.registry.builtin.fire import build_fire2_root
+
     root = build_fire2_root()
     # Load root to get suites, then navigate to core
     root.list_children()
@@ -479,6 +478,7 @@ def test_fire2_scrape_with_files(monkeypatch):
     monkeypatch.setattr(req_mod, "get", mock_get)
 
     from cosmo_dl.registry.builtin.fire import build_fire2_root
+
     root = build_fire2_root()
     children = root.list_children()
 
@@ -499,7 +499,6 @@ def test_fire2_scrape_with_files(monkeypatch):
 
 def test_fire2_resolve_dataset_url():
     """Resolving a dataset node should return its URL."""
-    from cosmo_dl.registry.builtin.fire import _build_dir_children
 
     # Build children from a simulated URL — the scraper is monkeypatched above,
     # so just verify the SourceNode contract directly
@@ -521,13 +520,16 @@ def test_fire2_resolve_dataset_url():
         name="test",
         path="FIRE2/test",
         node_type="category",
-        children={"test.hdf5": leaf, "test2.hdf5": SourceNode(
-            name="test2.hdf5",
-            path="FIRE2/test/test2.hdf5",
-            node_type="dataset",
-            url="https://example.com/test2.hdf5",
-            children={},
-        )},
+        children={
+            "test.hdf5": leaf,
+            "test2.hdf5": SourceNode(
+                name="test2.hdf5",
+                path="FIRE2/test/test2.hdf5",
+                node_type="dataset",
+                url="https://example.com/test2.hdf5",
+                children={},
+            ),
+        },
     )
     urls = parent.resolve()
     assert len(urls) == 2
@@ -581,6 +583,7 @@ def test_tng_tree_navigate_to_simulation():
 def test_tng_tree_has_auth():
     """TNG root should have auth if TNG_API_KEY is set."""
     import os
+
     roots = {r.name: r for r in get_builtin_roots()}
     tng = roots["TNG"]
     if "TNG_API_KEY" in os.environ:
@@ -626,9 +629,7 @@ def test_tng_no_subbox_at_subgroup_level():
     tng = roots["TNG"]
     tng50 = tng.get_child("TNG50")
     for child_name in tng50.list_children():
-        assert "Subbox" not in child_name, (
-            f"Subbox {child_name!r} should not be at sub-group level"
-        )
+        assert "Subbox" not in child_name, f"Subbox {child_name!r} should not be at sub-group level"
 
 
 def test_tng_dark_variant_is_sibling():
@@ -696,6 +697,7 @@ def test_tng_fallback_offline(monkeypatch):
     """In offline mode, fallback data produces a usable tree."""
     monkeypatch.setenv("COSMO_DL_OFFLINE", "true")
     from cosmo_dl.registry.builtin.tng import build_tng_root
+
     root = build_tng_root()
     assert root.name == "TNG"
     children = root.list_children()
@@ -710,9 +712,12 @@ def test_tng_fallback_offline(monkeypatch):
 def test_tng_source_info_command():
     """source info should work on simulation nodes."""
     import os
+
     os.environ["COSMO_DL_OFFLINE"] = "true"
     from click.testing import CliRunner
+
     from cosmo_dl.cli.main import cli
+
     runner = CliRunner()
     result = runner.invoke(cli, ["source", "info", "TNG/TNG50/TNG50-1"])
     assert result.exit_code == 0
@@ -764,6 +769,7 @@ def test_eagle_root_auth_attr(monkeypatch):
     )
 
     from cosmo_dl.registry.builtin.eagle import build_eagle_root
+
     root = build_eagle_root()
     assert root.auth is None
 
@@ -774,6 +780,7 @@ def test_eagle_root_auth_with_credentials(monkeypatch):
     monkeypatch.setenv("EAGLE_PASSWORD", "testpass")
 
     from cosmo_dl.registry.builtin.eagle import build_eagle_root
+
     root = build_eagle_root()
     assert root.auth is not None
     assert root.auth.type == "basic"
@@ -923,6 +930,7 @@ def test_eagle_varimf_has_11_snapshots():
 def test_eagle_total_simulation_count():
     """The total number of simulations should match the hardcoded list."""
     from cosmo_dl.registry.builtin.eagle import _SIMULATIONS
+
     assert len(_SIMULATIONS) == 26  # 26 simulations total
 
 

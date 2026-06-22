@@ -3,6 +3,7 @@
 Provides the primary user-facing functions: :func:`list_sources`, :func:`explore`,
 and :func:`download`.
 """
+
 from __future__ import annotations
 
 import threading
@@ -16,6 +17,7 @@ from rich.progress import (
     DownloadColumn,
     Progress,
     SpinnerColumn,
+    TaskID,
     TextColumn,
     TimeRemainingColumn,
     TransferSpeedColumn,
@@ -55,6 +57,7 @@ def _get_auth_for_target(target: str) -> AuthConfig | None:
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
+
 
 def list_sources() -> list[str]:
     """Return a sorted list of registered simulation source names.
@@ -107,7 +110,7 @@ def _resolve_target_with_paths(target: str) -> list[tuple[str, str | None]]:
     if "/" in target:
         source_name, dataset = target.split("/", 1)
         src = _registry._roots.get(source_name)
-        if src is not None and hasattr(src, 'base_url') and src.base_url:
+        if src is not None and hasattr(src, "base_url") and src.base_url:
             child = src.get_child(dataset)
             if child is not None:
                 return child.resolve_with_relpath()
@@ -288,7 +291,7 @@ def download(
             # smooth speed tracking, and an animated spinner, all managed
             # by rich itself (no manual speed book-keeping).
             rich_progress: Progress | None = None
-            task_id: int | None = None
+            task_id: TaskID | None = None
 
             if single_file and progress is None:
                 rich_progress = Progress(
@@ -319,7 +322,10 @@ def download(
 
                 if rich_progress is not None:
                     task_id = rich_progress.add_task(
-                        "download", filename=fname[:50], total=None, start=True,
+                        "download",
+                        filename=fname[:50],
+                        total=None,
+                        start=True,
                     )
                     rich_progress.start()
                 elif not single_file:
@@ -342,10 +348,7 @@ def download(
                         rich_progress.stop()
 
                 if not result.success:
-                    console.print(
-                        f"  [red]FAIL[/red]  {local_dest}\n"
-                        f"        {result.message}"
-                    )
+                    console.print(f"  [red]FAIL[/red]  {local_dest}\n        {result.message}")
                 results.append(result)
 
             if len(results) == 1:
@@ -353,7 +356,7 @@ def download(
             return results
 
         # --- Concurrent path (file_workers > 1, multiple files) -----------
-        results: list[DownloadResult] = []
+        concurrent_results: list[DownloadResult] = []
         results_lock = threading.Lock()
         n_failed = 0
 
@@ -382,16 +385,20 @@ def download(
                     result = future.result()
                 except Exception as exc:
                     result = DownloadResult(
-                        url=url, local_path=str(local_dest),
-                        size=0, elapsed=0, speed=0,
-                        success=False, message=str(exc),
+                        url=url,
+                        local_path=str(local_dest),
+                        size=0,
+                        elapsed=0,
+                        speed=0,
+                        success=False,
+                        message=str(exc),
                     )
 
                 with results_lock:
                     if not result.success:
                         n_failed += 1
                         _tqdm.write(f"  FAIL  {local_dest}\n        {result.message}")
-                    results.append(result)
+                    concurrent_results.append(result)
 
                 # Update progress bar from main thread
                 speed_str = ""
@@ -399,16 +406,14 @@ def download(
                     speed_mb = result.speed / (1024 * 1024)
                     speed_str = f"{speed_mb:.1f}MB/s"
                 fname = local_dest.name
-                pbar.set_postfix_str(
-                    f"{fname[:20]} {speed_str}" if speed_str else fname[:25]
-                )
+                pbar.set_postfix_str(f"{fname[:20]} {speed_str}" if speed_str else fname[:25])
                 pbar.update(1)
 
         pbar.close()
 
-        if len(results) == 1:
-            return results[0]
-        return results
+        if len(concurrent_results) == 1:
+            return concurrent_results[0]
+        return concurrent_results
     finally:
         if session is not None:
             session.close()

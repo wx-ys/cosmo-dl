@@ -1,8 +1,11 @@
 """Tests for the Registry class."""
+
 import tempfile
+
 import pytest
+
 from cosmo_dl.registry.registry import Registry
-from cosmo_dl.registry.source import SimulationSource, DatasetInfo
+from cosmo_dl.registry.source import SimulationSource
 
 
 class TestRegistry:
@@ -48,9 +51,7 @@ class TestRegistry:
     def test_register_custom_source(self):
         """Custom sources are added as root nodes via .to_node()."""
         reg = Registry()
-        custom = SimulationSource(
-            name="Custom", description="C", base_url="https://x.com/"
-        )
+        custom = SimulationSource(name="Custom", description="C", base_url="https://x.com/")
         node = custom.to_node()
         reg._roots[node.name] = node
         assert "Custom" in reg.list()
@@ -66,9 +67,7 @@ sources:
       data:
         path: files/
 """
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".yaml", delete=False
-        ) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
             f.write(yaml_content)
             f.flush()
             reg = Registry(user_config_path=f.name)

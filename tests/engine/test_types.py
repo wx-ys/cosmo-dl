@@ -1,6 +1,8 @@
 """Tests for engine types."""
+
 import pytest
-from cosmo_dl.engine.types import DownloadResult, FileEntry, AuthConfig
+
+from cosmo_dl.engine.types import AuthConfig, DownloadResult, FileEntry
 
 
 class TestDownloadResult:

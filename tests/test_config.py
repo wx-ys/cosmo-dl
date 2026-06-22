@@ -1,10 +1,11 @@
 """Tests for the config module."""
+
 import os
 import tempfile
 from pathlib import Path
-from unittest import mock
 
 import pytest
+
 from cosmo_dl import config
 
 
@@ -43,7 +44,7 @@ class TestDotenvParsing:
 
     def test_parse_quoted_values(self):
         with tempfile.NamedTemporaryFile(mode="w", suffix=".env", delete=False) as f:
-            f.write('KEY="quoted value"\nKEY2=\'single quoted\'\n')
+            f.write("KEY=\"quoted value\"\nKEY2='single quoted'\n")
             f.flush()
             result = config._parse_dotenv(Path(f.name))
         assert result == {"KEY": "quoted value", "KEY2": "single quoted"}

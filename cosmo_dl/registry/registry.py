@@ -1,5 +1,8 @@
 """Registry class for managing simulation sources as a hierarchical tree."""
+
 from __future__ import annotations
+
+import builtins
 
 from cosmo_dl.registry.builtin import get_builtin_roots
 from cosmo_dl.registry.loader import load_sources_from_yaml
@@ -23,6 +26,7 @@ class Registry:
 
         # Load user-defined sources and convert to nodes
         import os
+
         if user_config_path is None:
             user_config_path = os.path.expanduser("~/.config/cosmo-dl/sources.yaml")
         for src in load_sources_from_yaml(user_config_path):
@@ -59,11 +63,11 @@ class Registry:
     # Legacy API (backward compat)
     # ------------------------------------------------------------------
 
-    def list(self) -> list[str]:
+    def list(self) -> builtins.list[str]:
         """Return sorted names of all root nodes."""
         return sorted(self._roots.keys())
 
-    def list_by_group(self) -> dict[str, list[str]]:
+    def list_by_group(self) -> dict[str, builtins.list[str]]:
         """Return root nodes grouped (all roots are top-level groups)."""
         return {"Simulations": self.list()}
 
@@ -74,6 +78,7 @@ class Registry:
             return None
         # Try to convert back (lossy for native trees)
         from cosmo_dl.registry.source import DatasetInfo
+
         datasets: dict[str, DatasetInfo] = {}
         for child in node.list_children().values():
             datasets[child.name] = DatasetInfo(
@@ -88,7 +93,7 @@ class Registry:
             datasets=datasets,
         )
 
-    def resolve(self, target: str) -> list[str]:
+    def resolve(self, target: str) -> builtins.list[str]:
         """Resolve *target* into download URLs.
 
         Supports:
@@ -108,7 +113,7 @@ class Registry:
         if "/" in target:
             source_name, dataset = target.split("/", 1)
             src = self._roots.get(source_name)
-            if src is not None and hasattr(src, 'base_url') and src.base_url:
+            if src is not None and hasattr(src, "base_url") and src.base_url:
                 child = src.get_child(dataset)
                 if child is not None:
                     return child.resolve()

@@ -1,4 +1,5 @@
 """Token bucket rate limiter for download bandwidth throttling."""
+
 import re
 import threading
 import time
@@ -31,8 +32,7 @@ class RateLimiter:
         match = re.fullmatch(r"(\d+(?:\.\d+)?)\s*([kmg]?)(?:b/s)?", rate)
         if not match:
             raise ValueError(
-                f"Invalid rate format: {rate!r}. "
-                f"Expected e.g. '10M', '500K', '1G', 'unlimited'"
+                f"Invalid rate format: {rate!r}. Expected e.g. '10M', '500K', '1G', 'unlimited'"
             )
 
         value = float(match.group(1))

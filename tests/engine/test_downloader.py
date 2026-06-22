@@ -1,12 +1,9 @@
 """Tests for Downloader."""
-import tempfile
-from pathlib import Path
-import pytest
+
 import responses
-from cosmo_dl.engine.downloader import Downloader, MB
-from cosmo_dl.engine.session import Session
+
+from cosmo_dl.engine.downloader import MB, Downloader
 from cosmo_dl.engine.rate_limiter import RateLimiter
-from cosmo_dl.engine.types import DownloadResult
 
 
 class TestDownloader:
@@ -30,6 +27,7 @@ class TestDownloader:
     @responses.activate
     def test_download_with_expected_hash(self, tmp_path):
         import hashlib
+
         content = b"verify this file"
         expected = hashlib.sha256(content).hexdigest()
 
@@ -42,8 +40,10 @@ class TestDownloader:
         dest = tmp_path / "verified.hdf5"
         dl = Downloader()
         result = dl.download(
-            "https://example.com/verified.hdf5", dest,
-            workers=1, expected_hash=f"sha256:{expected}",
+            "https://example.com/verified.hdf5",
+            dest,
+            workers=1,
+            expected_hash=f"sha256:{expected}",
         )
         assert result.success is True
 
@@ -59,8 +59,10 @@ class TestDownloader:
         dest = tmp_path / "bad.hdf5"
         dl = Downloader()
         result = dl.download(
-            "https://example.com/bad.hdf5", dest,
-            workers=1, expected_hash="sha256:00000000000000000000000000000000",
+            "https://example.com/bad.hdf5",
+            dest,
+            workers=1,
+            expected_hash="sha256:00000000000000000000000000000000",
         )
         assert result.success is False
 
@@ -83,8 +85,7 @@ class TestDownloader:
         dest.write_bytes(content[:1000])
 
         dl = Downloader()
-        result = dl.download("https://example.com/resume.hdf5", dest,
-                             workers=1, resume=True)
+        result = dl.download("https://example.com/resume.hdf5", dest, workers=1, resume=True)
         assert result.success is True
         assert dest.read_bytes() == content
 

@@ -32,6 +32,7 @@ Dark variants are independent simulations, shown as siblings at sub-group level.
 Each level is loaded lazily with a single API call to the TNG REST API.
 In offline mode a built-in fallback list is used.
 """
+
 from __future__ import annotations
 
 import logging
@@ -59,73 +60,208 @@ TNG_GROUP = "TNG"
 
 _FALLBACK_SIMULATIONS: list[tuple[str, str, int, bool]] = [
     # (name, description, num_snapshots, is_subbox)
-    ("TNG50-1",           "Main high-resolution IllustrisTNG50 run including the full TNG physics model.",       100, False),
-    ("TNG50-1-Dark",      "Main high-resolution IllustrisTNG50 run - dark matter only analog.",   100, False),
-    ("TNG50-2",           "Intermediate resolution (level 2) IllustrisTNG50 run including the full TNG physics model.", 100, False),
-    ("TNG50-2-Dark",      "Intermediate resolution (level 2) IllustrisTNG50 run - dark matter only analog.", 100, False),
-    ("TNG50-3",           "Low resolution (level 3) IllustrisTNG50 run including the full TNG physics model.", 100, False),
-    ("TNG50-3-Dark",      "Low resolution (level 3) IllustrisTNG50 run - dark matter only analog.", 100, False),
-    ("TNG50-4",           "Lowest resolution (level 4) IllustrisTNG50 run including the full TNG physics model.", 100, False),
-    ("TNG50-4-Dark",      "Lowest resolution (level 4) IllustrisTNG50 run - dark matter only analog.", 100, False),
-    ("TNG100-1",          "Main high-resolution IllustrisTNG100 run including the full TNG physics model.",      100, False),
-    ("TNG100-1-Dark",     "Main high-resolution IllustrisTNG100 run - dark matter only analog.",  100, False),
-    ("TNG100-2",          "Intermediate resolution (level 2) IllustrisTNG100 run including the full TNG physics model.", 100, False),
-    ("TNG100-2-Dark",     "Intermediate resolution (level 2) IllustrisTNG100 run - dark matter only analog.", 100, False),
-    ("TNG100-3",          "Low resolution (level 3) IllustrisTNG100 run including the full TNG physics model.", 100, False),
-    ("TNG100-3-Dark",     "Low resolution (level 3) IllustrisTNG100 run - dark matter only analog.", 100, False),
-    ("TNG300-1",          "Main high-resolution IllustrisTNG300 run including the full TNG physics model.",      100, False),
-    ("TNG300-1-Dark",     "Main high-resolution IllustrisTNG300 run - dark matter only analog.",  100, False),
-    ("TNG300-2",          "Intermediate resolution (level 2) IllustrisTNG300 run including the full TNG physics model.", 100, False),
-    ("TNG300-2-Dark",     "Intermediate resolution (level 2) IllustrisTNG300 run - dark matter only analog.", 100, False),
-    ("TNG300-3",          "Low resolution (level 3) IllustrisTNG300 run including the full TNG physics model.", 100, False),
-    ("TNG300-3-Dark",     "Low resolution (level 3) IllustrisTNG300 run - dark matter only analog.", 100, False),
-    ("TNG-Cluster",       "Main high-resolution TNG-Cluster simulation suite (virtual box), with the full fiducial TNG physics model.",   100, False),
-    ("Illustris-1",       "Main high-resolution Illustris run including the full physics model.",      134, False),
-    ("Illustris-1-Dark",  "Main high-resolution Illustris run - dark matter only analog.",   136, False),
-    ("Illustris-2",       "Intermediate resolution (level 2) Illustris run including the full physics model.", 136, False),
-    ("Illustris-2-Dark",  "Intermediate resolution (level 2) Illustris run - dark matter only analog.", 136, False),
-    ("Illustris-3",       "Low resolution (level 3) Illustris run including the full physics model.", 136, False),
-    ("Illustris-3-Dark",  "Low resolution (level 3) Illustris run - dark matter only analog.", 136, False),
+    (
+        "TNG50-1",
+        "Main high-resolution IllustrisTNG50 run including the full TNG physics model.",
+        100,
+        False,
+    ),
+    (
+        "TNG50-1-Dark",
+        "Main high-resolution IllustrisTNG50 run - dark matter only analog.",
+        100,
+        False,
+    ),
+    (
+        "TNG50-2",
+        "Intermediate resolution (level 2) IllustrisTNG50 run including the full TNG physics model.",
+        100,
+        False,
+    ),
+    (
+        "TNG50-2-Dark",
+        "Intermediate resolution (level 2) IllustrisTNG50 run - dark matter only analog.",
+        100,
+        False,
+    ),
+    (
+        "TNG50-3",
+        "Low resolution (level 3) IllustrisTNG50 run including the full TNG physics model.",
+        100,
+        False,
+    ),
+    (
+        "TNG50-3-Dark",
+        "Low resolution (level 3) IllustrisTNG50 run - dark matter only analog.",
+        100,
+        False,
+    ),
+    (
+        "TNG50-4",
+        "Lowest resolution (level 4) IllustrisTNG50 run including the full TNG physics model.",
+        100,
+        False,
+    ),
+    (
+        "TNG50-4-Dark",
+        "Lowest resolution (level 4) IllustrisTNG50 run - dark matter only analog.",
+        100,
+        False,
+    ),
+    (
+        "TNG100-1",
+        "Main high-resolution IllustrisTNG100 run including the full TNG physics model.",
+        100,
+        False,
+    ),
+    (
+        "TNG100-1-Dark",
+        "Main high-resolution IllustrisTNG100 run - dark matter only analog.",
+        100,
+        False,
+    ),
+    (
+        "TNG100-2",
+        "Intermediate resolution (level 2) IllustrisTNG100 run including the full TNG physics model.",
+        100,
+        False,
+    ),
+    (
+        "TNG100-2-Dark",
+        "Intermediate resolution (level 2) IllustrisTNG100 run - dark matter only analog.",
+        100,
+        False,
+    ),
+    (
+        "TNG100-3",
+        "Low resolution (level 3) IllustrisTNG100 run including the full TNG physics model.",
+        100,
+        False,
+    ),
+    (
+        "TNG100-3-Dark",
+        "Low resolution (level 3) IllustrisTNG100 run - dark matter only analog.",
+        100,
+        False,
+    ),
+    (
+        "TNG300-1",
+        "Main high-resolution IllustrisTNG300 run including the full TNG physics model.",
+        100,
+        False,
+    ),
+    (
+        "TNG300-1-Dark",
+        "Main high-resolution IllustrisTNG300 run - dark matter only analog.",
+        100,
+        False,
+    ),
+    (
+        "TNG300-2",
+        "Intermediate resolution (level 2) IllustrisTNG300 run including the full TNG physics model.",
+        100,
+        False,
+    ),
+    (
+        "TNG300-2-Dark",
+        "Intermediate resolution (level 2) IllustrisTNG300 run - dark matter only analog.",
+        100,
+        False,
+    ),
+    (
+        "TNG300-3",
+        "Low resolution (level 3) IllustrisTNG300 run including the full TNG physics model.",
+        100,
+        False,
+    ),
+    (
+        "TNG300-3-Dark",
+        "Low resolution (level 3) IllustrisTNG300 run - dark matter only analog.",
+        100,
+        False,
+    ),
+    (
+        "TNG-Cluster",
+        "Main high-resolution TNG-Cluster simulation suite (virtual box), with the full fiducial TNG physics model.",
+        100,
+        False,
+    ),
+    (
+        "Illustris-1",
+        "Main high-resolution Illustris run including the full physics model.",
+        134,
+        False,
+    ),
+    (
+        "Illustris-1-Dark",
+        "Main high-resolution Illustris run - dark matter only analog.",
+        136,
+        False,
+    ),
+    (
+        "Illustris-2",
+        "Intermediate resolution (level 2) Illustris run including the full physics model.",
+        136,
+        False,
+    ),
+    (
+        "Illustris-2-Dark",
+        "Intermediate resolution (level 2) Illustris run - dark matter only analog.",
+        136,
+        False,
+    ),
+    (
+        "Illustris-3",
+        "Low resolution (level 3) Illustris run including the full physics model.",
+        136,
+        False,
+    ),
+    (
+        "Illustris-3-Dark",
+        "Low resolution (level 3) Illustris run - dark matter only analog.",
+        136,
+        False,
+    ),
     # Subboxes
-    ("TNG50-1-Subbox0",   "TNG50-1 subbox 0",                         3600, True),
-    ("TNG50-1-Subbox1",   "TNG50-1 subbox 1",                         3600, True),
-    ("TNG50-1-Subbox2",   "TNG50-1 subbox 2",                         3600, True),
-    ("TNG50-2-Subbox0",   "TNG50-2 subbox 0",                         1895, True),
-    ("TNG50-2-Subbox1",   "TNG50-2 subbox 1",                         1895, True),
-    ("TNG50-2-Subbox2",   "TNG50-2 subbox 2",                         1895, True),
-    ("TNG50-3-Subbox0",   "TNG50-3 subbox 0",                         4006, True),
-    ("TNG50-3-Subbox1",   "TNG50-3 subbox 1",                         4006, True),
-    ("TNG50-3-Subbox2",   "TNG50-3 subbox 2",                         4006, True),
-    ("TNG50-4-Subbox0",   "TNG50-4 subbox 0",                         2333, True),
-    ("TNG50-4-Subbox1",   "TNG50-4 subbox 1",                         2333, True),
-    ("TNG50-4-Subbox2",   "TNG50-4 subbox 2",                         2333, True),
-    ("TNG100-1-Subbox0",  "TNG100-1 subbox 0",                        7908, True),
-    ("TNG100-1-Subbox1",  "TNG100-1 subbox 1",                        7908, True),
-    ("TNG100-2-Subbox0",  "TNG100-2 subbox 0",                        4380, True),
-    ("TNG100-2-Subbox1",  "TNG100-2 subbox 1",                        4380, True),
-    ("TNG100-3-Subbox0",  "TNG100-3 subbox 0",                        2431, True),
-    ("TNG100-3-Subbox1",  "TNG100-3 subbox 1",                        2431, True),
-    ("TNG300-1-Subbox0",  "TNG300-1 subbox 0",                        2449, True),
-    ("TNG300-1-Subbox1",  "TNG300-1 subbox 1",                        2449, True),
-    ("TNG300-1-Subbox2",  "TNG300-1 subbox 2",                        2449, True),
-    ("TNG300-2-Subbox0",  "TNG300-2 subbox 0",                        3045, True),
-    ("TNG300-2-Subbox1",  "TNG300-2 subbox 1",                        3045, True),
-    ("TNG300-2-Subbox2",  "TNG300-2 subbox 2",                        3045, True),
-    ("TNG300-3-Subbox0",  "TNG300-3 subbox 0",                        2050, True),
-    ("TNG300-3-Subbox1",  "TNG300-3 subbox 1",                        2050, True),
-    ("TNG300-3-Subbox2",  "TNG300-3 subbox 2",                        2050, True),
-    ("Illustris-1-Subbox0","Illustris-1 subbox 0",                    3970, True),
-    ("Illustris-1-Subbox1","Illustris-1 subbox 1",                    3969, True),
-    ("Illustris-1-Subbox2","Illustris-1 subbox 2",                    3972, True),
-    ("Illustris-1-Subbox3","Illustris-1 subbox 3",                    3970, True),
-    ("Illustris-2-Subbox0","Illustris-2 subbox 0",                    2265, True),
-    ("Illustris-2-Subbox1","Illustris-2 subbox 1",                    2265, True),
-    ("Illustris-2-Subbox2","Illustris-2 subbox 2",                    2264, True),
-    ("Illustris-2-Subbox3","Illustris-2 subbox 3",                    2265, True),
-    ("Illustris-3-Subbox0","Illustris-3 subbox 0",                    1426, True),
-    ("Illustris-3-Subbox1","Illustris-3 subbox 1",                    1426, True),
-    ("Illustris-3-Subbox2","Illustris-3 subbox 2",                    1426, True),
-    ("Illustris-3-Subbox3","Illustris-3 subbox 3",                    1426, True),
+    ("TNG50-1-Subbox0", "TNG50-1 subbox 0", 3600, True),
+    ("TNG50-1-Subbox1", "TNG50-1 subbox 1", 3600, True),
+    ("TNG50-1-Subbox2", "TNG50-1 subbox 2", 3600, True),
+    ("TNG50-2-Subbox0", "TNG50-2 subbox 0", 1895, True),
+    ("TNG50-2-Subbox1", "TNG50-2 subbox 1", 1895, True),
+    ("TNG50-2-Subbox2", "TNG50-2 subbox 2", 1895, True),
+    ("TNG50-3-Subbox0", "TNG50-3 subbox 0", 4006, True),
+    ("TNG50-3-Subbox1", "TNG50-3 subbox 1", 4006, True),
+    ("TNG50-3-Subbox2", "TNG50-3 subbox 2", 4006, True),
+    ("TNG50-4-Subbox0", "TNG50-4 subbox 0", 2333, True),
+    ("TNG50-4-Subbox1", "TNG50-4 subbox 1", 2333, True),
+    ("TNG50-4-Subbox2", "TNG50-4 subbox 2", 2333, True),
+    ("TNG100-1-Subbox0", "TNG100-1 subbox 0", 7908, True),
+    ("TNG100-1-Subbox1", "TNG100-1 subbox 1", 7908, True),
+    ("TNG100-2-Subbox0", "TNG100-2 subbox 0", 4380, True),
+    ("TNG100-2-Subbox1", "TNG100-2 subbox 1", 4380, True),
+    ("TNG100-3-Subbox0", "TNG100-3 subbox 0", 2431, True),
+    ("TNG100-3-Subbox1", "TNG100-3 subbox 1", 2431, True),
+    ("TNG300-1-Subbox0", "TNG300-1 subbox 0", 2449, True),
+    ("TNG300-1-Subbox1", "TNG300-1 subbox 1", 2449, True),
+    ("TNG300-1-Subbox2", "TNG300-1 subbox 2", 2449, True),
+    ("TNG300-2-Subbox0", "TNG300-2 subbox 0", 3045, True),
+    ("TNG300-2-Subbox1", "TNG300-2 subbox 1", 3045, True),
+    ("TNG300-2-Subbox2", "TNG300-2 subbox 2", 3045, True),
+    ("TNG300-3-Subbox0", "TNG300-3 subbox 0", 2050, True),
+    ("TNG300-3-Subbox1", "TNG300-3 subbox 1", 2050, True),
+    ("TNG300-3-Subbox2", "TNG300-3 subbox 2", 2050, True),
+    ("Illustris-1-Subbox0", "Illustris-1 subbox 0", 3970, True),
+    ("Illustris-1-Subbox1", "Illustris-1 subbox 1", 3969, True),
+    ("Illustris-1-Subbox2", "Illustris-1 subbox 2", 3972, True),
+    ("Illustris-1-Subbox3", "Illustris-1 subbox 3", 3970, True),
+    ("Illustris-2-Subbox0", "Illustris-2 subbox 0", 2265, True),
+    ("Illustris-2-Subbox1", "Illustris-2 subbox 1", 2265, True),
+    ("Illustris-2-Subbox2", "Illustris-2 subbox 2", 2264, True),
+    ("Illustris-2-Subbox3", "Illustris-2 subbox 3", 2265, True),
+    ("Illustris-3-Subbox0", "Illustris-3 subbox 0", 1426, True),
+    ("Illustris-3-Subbox1", "Illustris-3 subbox 1", 1426, True),
+    ("Illustris-3-Subbox2", "Illustris-3 subbox 2", 1426, True),
+    ("Illustris-3-Subbox3", "Illustris-3 subbox 3", 1426, True),
 ]
 
 # Keys in the simulation detail "files" dict that are handled specially
@@ -147,7 +283,10 @@ _API_TIMEOUT = (10, 300)
 
 def _is_offline() -> bool:
     return os.environ.get("COSMO_DL_OFFLINE", "").strip().lower() in (
-        "1", "true", "yes", "on",
+        "1",
+        "true",
+        "yes",
+        "on",
     )
 
 
@@ -172,13 +311,14 @@ def _make_session() -> requests.Session | None:
 
     # Retry adapter (matching proven TNG downloader config)
     retries = Retry(
-        total=5, backoff_factor=1,
+        total=5,
+        backoff_factor=1,
         status_forcelist=(429, 500, 502, 503, 504),
-        allowed_methods=frozenset(['GET', 'HEAD', 'OPTIONS']),
+        allowed_methods=frozenset(["GET", "HEAD", "OPTIONS"]),
     )
     adapter = HTTPAdapter(max_retries=retries, pool_connections=100, pool_maxsize=100)
-    session.mount('http://', adapter)
-    session.mount('https://', adapter)
+    session.mount("http://", adapter)
+    session.mount("https://", adapter)
 
     return session
 
@@ -264,9 +404,7 @@ def _fetch_simulations() -> list[tuple[str, str, int, bool]]:
 
     sims = data.get("simulations")
     if not isinstance(sims, list) or not sims:
-        logger.warning(
-            "TNG API returned no simulation list. Using fallback list."
-        )
+        logger.warning("TNG API returned no simulation list. Using fallback list.")
         return list(_FALLBACK_SIMULATIONS)
 
     result: list[tuple[str, str, int, bool]] = []
@@ -312,7 +450,7 @@ def _fetch_simulation_detail(sim_name: str) -> dict:
     try:
         resp = session.get(f"{TNG_API_BASE}{sim_name}/", timeout=_API_TIMEOUT)
         resp.raise_for_status()
-        return resp.json()
+        return resp.json()  # type: ignore[no-any-return]
     except Exception:
         return fallback
     finally:
@@ -334,10 +472,11 @@ def _fetch_snapshots(sim_name: str) -> list[dict]:
 
     try:
         resp = session.get(
-            f"{TNG_API_BASE}{sim_name}/snapshots/", timeout=_API_TIMEOUT,
+            f"{TNG_API_BASE}{sim_name}/snapshots/",
+            timeout=_API_TIMEOUT,
         )
         resp.raise_for_status()
-        return resp.json()
+        return resp.json()  # type: ignore[no-any-return]
     except Exception:
         detail = _fetch_simulation_detail(sim_name)
         nsnap = detail.get("num_snapshots", 100)
@@ -396,7 +535,8 @@ def _fetch_file_list(url: str) -> list[tuple[str, bool]]:
 
 
 def _build_snapshot_file_children(
-    sim_name: str, snap_num: int,
+    sim_name: str,
+    snap_num: int,
 ) -> dict[str, SourceNode]:
     """Build children for an individual snapshot: snapshot/ and groupcat/ file lists."""
     path_prefix = f"TNG/{_sub_group(sim_name)}/{sim_name}/snapshots/sn-{snap_num}"
@@ -474,6 +614,7 @@ def _build_snapshots_children(sim_name: str) -> dict[str, SourceNode]:
         def _make_loader(sn: str = sim_name, n: int = num):
             def _load() -> dict[str, SourceNode]:
                 return _build_snapshot_file_children(sn, n)
+
             return _load
 
         children[name] = SourceNode(
@@ -493,7 +634,9 @@ def _build_snapshots_children(sim_name: str) -> dict[str, SourceNode]:
 
 
 def _build_file_list_children(
-    list_url: str, sim_name: str, relpath_prefix: str,
+    list_url: str,
+    sim_name: str,
+    relpath_prefix: str,
 ) -> dict[str, SourceNode]:
     """Build children from a TNG API file/directory listing.
 
@@ -514,6 +657,7 @@ def _build_file_list_children(
             def _make_dir_loader(u: str = entry_url, sn: str = sim_name, rp: str = sub_relpath):
                 def _load() -> dict[str, SourceNode]:
                     return _build_file_list_children(u, sn, rp)
+
                 return _load
 
             children[dir_name] = SourceNode(
@@ -543,7 +687,8 @@ def _build_file_list_children(
 
 
 def _build_postprocessing_children(
-    sim_name: str, files: dict,
+    sim_name: str,
+    files: dict,
 ) -> dict[str, SourceNode]:
     """Build postprocessing/ children: trees (LHaloTree, SubLink) + offsets."""
     path_prefix = f"TNG/{_sub_group(sim_name)}/{sim_name}/postprocessing"
@@ -555,25 +700,27 @@ def _build_postprocessing_children(
         tree_url = files.get(file_key)
         if not tree_url or not isinstance(tree_url, str):
             continue
+        tree_url_str: str = tree_url
 
         relpath = f"{sim_name}/postprocessing/trees/{tree_name}/"
-        if tree_url.rstrip("/").endswith((".hdf5", ".hdf5")):
+        if tree_url_str.rstrip("/").endswith(".hdf5"):
             # Single file
-            fname = tree_url.rstrip("/").rsplit("/", 1)[-1]
+            fname = tree_url_str.rstrip("/").rsplit("/", 1)[-1]
             tree_children[tree_name] = SourceNode(
                 name=fname,
                 path=f"{path_prefix}/trees/{fname}",
                 description=f"{tree_name} merger tree data",
                 node_type="dataset",
-                url=tree_url,
+                url=tree_url_str,
                 children={},
                 download_relpath=f"{relpath}{fname}",
             )
         else:
             # Directory — lazy load file list
-            def _make_loader(u: str = tree_url, sn: str = sim_name, rp: str = relpath):
+            def _make_loader(u: str = tree_url_str, sn: str = sim_name, rp: str = relpath):
                 def _load() -> dict[str, SourceNode]:
                     return _build_file_list_children(u, sn, rp)
+
                 return _load
 
             tree_children[tree_name] = SourceNode(
@@ -599,23 +746,29 @@ def _build_postprocessing_children(
     # --- offsets/ ---
     offsets_url = files.get("offsets")
     if offsets_url and isinstance(offsets_url, str):
+        offsets_url_str: str = offsets_url
         relpath = f"{sim_name}/postprocessing/offsets/"
-        if offsets_url.rstrip("/").endswith((".hdf5", ".hdf5")):
-            fname = offsets_url.rstrip("/").rsplit("/", 1)[-1]
+        if offsets_url_str.rstrip("/").endswith(".hdf5"):
+            fname = offsets_url_str.rstrip("/").rsplit("/", 1)[-1]
             children["offsets"] = SourceNode(
                 name=fname,
                 path=f"{path_prefix}/offsets/{fname}",
                 description="Snapshot offsets",
                 node_type="dataset",
-                url=offsets_url,
+                url=offsets_url_str,
                 children={},
                 download_relpath=f"{relpath}{fname}",
             )
         else:
             # Directory listing
-            def _make_offsets_loader(u: str = offsets_url, sn: str = sim_name, rp: str = relpath):
+            def _make_offsets_loader(
+                u: str = offsets_url_str,
+                sn: str = sim_name,
+                rp: str = relpath,
+            ):
                 def _load() -> dict[str, SourceNode]:
                     return _build_file_list_children(u, sn, rp)
+
                 return _load
 
             children["offsets"] = SourceNode(
@@ -635,7 +788,8 @@ def _build_postprocessing_children(
 
 
 def _build_files_children(
-    sim_name: str, files: dict,
+    sim_name: str,
+    files: dict,
 ) -> dict[str, SourceNode]:
     """Build files/ children: directories first, then single files.
 
@@ -689,6 +843,7 @@ def _build_files_children(
             def _make_loader(u: str = url, sn: str = sim_name, rp: str = relpath):
                 def _load() -> dict[str, SourceNode]:
                     return _build_file_list_children(u, sn, rp)
+
                 return _load
 
             dirs[key] = SourceNode(
@@ -721,7 +876,9 @@ def _build_files_children(
 
 
 def _build_subboxes_children(
-    child_urls: list[str], parent_sim: str, auth: AuthConfig | None,
+    child_urls: list[str],
+    parent_sim: str,
+    auth: AuthConfig | None,
 ) -> dict[str, SourceNode]:
     """Build subboxes/ children from ``child_simulations`` API field."""
     children: dict[str, SourceNode] = {}
@@ -735,7 +892,10 @@ def _build_subboxes_children(
         sub_relpath = f"{parent_sim}/output/subbox{sub_num}/"
 
         node = _build_simulation_node(
-            sub_name, auth, is_subbox=True, parent_sim=parent_sim,
+            sub_name,
+            auth,
+            is_subbox=True,
+            parent_sim=parent_sim,
         )
         # Override: subbox data goes under the parent sim's output dir
         node.download_relpath = sub_relpath
@@ -767,6 +927,7 @@ def _build_simulation_children(
     # -- snapshots/ --
     def _load_snapshots() -> dict[str, SourceNode]:
         return _build_snapshots_children(sim_name)
+
     children["snapshots"] = SourceNode(
         name="snapshots",
         path=f"{path_prefix}/snapshots",
@@ -780,6 +941,7 @@ def _build_simulation_children(
     # -- postprocessing/ --
     def _load_postproc() -> dict[str, SourceNode]:
         return _build_postprocessing_children(sim_name, files)
+
     children["postprocessing"] = SourceNode(
         name="postprocessing",
         path=f"{path_prefix}/postprocessing",
@@ -793,9 +955,11 @@ def _build_simulation_children(
     # -- files/ --
     def _load_files() -> dict[str, SourceNode]:
         return _build_files_children(sim_name, files)
+
     # Count approximate number of single-file entries
     n_files = sum(
-        1 for k, v in files.items()
+        1
+        for k, v in files.items()
         if k not in _SKIP_FILE_KEYS
         and isinstance(v, str)
         and not re.match(r"^(snapshot|groupcat)-\d+$", k)
@@ -817,6 +981,7 @@ def _build_simulation_children(
 
         def _load_subboxes() -> dict[str, SourceNode]:
             return _build_subboxes_children(child_urls, base_name, auth)
+
         children["subboxes"] = SourceNode(
             name="subboxes",
             path=f"{path_prefix}/subboxes",
@@ -846,7 +1011,7 @@ def _build_simulation_node(
     child_urls = detail.get("child_simulations", [])
     if not isinstance(child_urls, list):
         child_urls = []
-    files = detail.get("files", {})
+    detail.get("files", {})
 
     # Count children: snapshots + postprocessing + files + subboxes (if any)
     child_count = 4  # snapshots, postprocessing, files, subboxes
@@ -866,8 +1031,12 @@ def _build_simulation_node(
 
     def _load_children() -> dict[str, SourceNode]:
         return _build_simulation_children(
-            sim_name, detail, child_urls, auth,
-            is_subbox=is_subbox, parent_sim=parent_sim,
+            sim_name,
+            detail,
+            child_urls,
+            auth,
+            is_subbox=is_subbox,
+            parent_sim=parent_sim,
         )
 
     return SourceNode(
@@ -895,7 +1064,7 @@ def _build_subgroup_children(
     Main simulations and their Dark variants are all siblings at this level.
     """
     children: dict[str, SourceNode] = {}
-    for name, desc, nsnap, is_sub in sims:
+    for name, _desc, _nsnap, is_sub in sims:
         if is_sub:
             continue  # Subboxes are nested under their parent sim
         children[name] = _build_simulation_node(name, auth)
@@ -942,7 +1111,7 @@ def _build_tng_children(auth: AuthConfig | None) -> dict[str, SourceNode]:
             description=group_desc,
             node_type="group",
             child_count=len(top_level),
-            _loader=lambda g=group_sims, a=auth: _build_subgroup_children(g, a),
+            _loader=lambda g=group_sims, a=auth: _build_subgroup_children(g, a),  # type: ignore[misc]
             auth=auth,
         )
     return children
@@ -983,6 +1152,6 @@ def build_tng_root() -> SourceNode:
         description=f"IllustrisTNG project — {sim_count} simulation(s)",
         node_type="group",
         child_count=sim_count,
-        _loader=lambda a=auth: _build_tng_children(a),
+        _loader=lambda a=auth: _build_tng_children(a),  # type: ignore[misc]
         auth=auth,
     )

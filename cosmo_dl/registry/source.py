@@ -1,4 +1,5 @@
 """Registry source types — SourceNode tree and legacy SimulationSource."""
+
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -8,6 +9,7 @@ from typing import Literal
 # ---------------------------------------------------------------------------
 # SourceNode — hierarchical source tree
 # ---------------------------------------------------------------------------
+
 
 @dataclass(slots=True)
 class SourceNode:
@@ -76,7 +78,7 @@ class SourceNode:
         for segment in path.strip("/").split("/"):
             if not segment:
                 continue
-            node = node.get_child(segment)
+            node = node.get_child(segment)  # type: ignore[assignment]
             if node is None:
                 return None
         return node
@@ -129,6 +131,7 @@ class SourceNode:
 # Legacy types (kept for backward compatibility)
 # ---------------------------------------------------------------------------
 
+
 @dataclass(slots=True)
 class DatasetInfo:
     """Describes a dataset within a simulation source (legacy)."""
@@ -141,8 +144,7 @@ class DatasetInfo:
     def expand_urls(self, base_url: str) -> list[str]:
         if self.pattern is not None and self.chunks is not None:
             return [
-                f"{base_url}{self.path}{self.pattern.format(chunk=i)}"
-                for i in range(self.chunks)
+                f"{base_url}{self.path}{self.pattern.format(chunk=i)}" for i in range(self.chunks)
             ]
         return [f"{base_url}{self.path}"]
 
@@ -182,7 +184,7 @@ class SimulationSource:
                 child_children[leaf_name] = SourceNode(
                     name=leaf_name,
                     path=f"{self.name}/{ds_name}/{leaf_name}",
-                    description=f"{ds.description} (file {i+1}/{len(urls)})",
+                    description=f"{ds.description} (file {i + 1}/{len(urls)})",
                     node_type="dataset",
                     url=url,
                     auth=self.auth,
