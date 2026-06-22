@@ -38,7 +38,7 @@ def download_cmd(target, workers, file_workers, limit, output, resume, hash_algo
                 local_path = FileManager.mirror_path(entry.url, base_url=target, local_root=output)
                 local_path.parent.mkdir(parents=True, exist_ok=True)
                 try:
-                    result = api_download(entry.url, local_path, workers=workers, file_workers=file_workers, rate_limit=limit, resume=resume)
+                    result = api_download(entry.url, local_path, workers=workers, file_workers=file_workers, rate_limit=limit, resume=resume, expected_hash=hash_algo)
                     if result.success:
                         succeeded += 1
                     else:
@@ -50,11 +50,15 @@ def download_cmd(target, workers, file_workers, limit, output, resume, hash_algo
                 pbar.update(1)
         click.echo(f"\nDone. {succeeded} succeeded, {failed} failed.")
     else:
-        result = api_download(target, output_dir=output, workers=workers, file_workers=file_workers, rate_limit=limit, resume=resume)
+        result = api_download(target, output_dir=output, workers=workers, file_workers=file_workers, rate_limit=limit, resume=resume, expected_hash=hash_algo)
         if isinstance(result, list):
             for r in result:
                 status = "OK" if r.success else f"FAILED: {r.message}"
                 click.echo(f"  {r.local_path}: {status}")
+                if r.checksum:
+                    click.echo(f"    {r.checksum}")
         else:
             status = "OK" if result.success else f"FAILED: {result.message}"
             click.echo(f"  {result.local_path}: {status}")
+            if result.checksum:
+                click.echo(f"    {result.checksum}")

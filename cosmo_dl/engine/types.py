@@ -13,6 +13,7 @@ class DownloadResult:
     speed: float
     success: bool
     message: str = "OK"
+    checksum: str | None = None
 
 
 @dataclass(slots=True)

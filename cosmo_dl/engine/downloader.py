@@ -400,15 +400,41 @@ class Downloader:
                     start_time=start_time,
                 )
 
-            # -- Post-download integrity check --------------------------------
-            if not FileManager.check_integrity(
-                final_dest,
-                expected_size=expected_size,
-                expected_hash=expected_hash,
-            ):
-                raise ValueError(
-                    "Integrity check failed: size or hash does not match"
-                )
+            # -- Post-download integrity check / hash computation ------------
+            checksum: str | None = None
+
+            if expected_hash is not None:
+                if ":" in expected_hash:
+                    # Verify against a known hash
+                    if not FileManager.check_integrity(
+                        final_dest,
+                        expected_size=expected_size,
+                        expected_hash=expected_hash,
+                    ):
+                        raise ValueError(
+                            "Integrity check failed: "
+                            f"hash does not match {expected_hash}"
+                        )
+                    checksum = expected_hash
+                else:
+                    # Algorithm name only — compute the hash for display
+                    try:
+                        digest = FileManager._hash_file(
+                            final_dest, expected_hash,
+                        )
+                        checksum = f"{expected_hash}:{digest}"
+                    except ValueError as exc:
+                        raise ValueError(
+                            f"Unknown hash algorithm: {expected_hash}"
+                        ) from exc
+
+            elif expected_size is not None:
+                if not FileManager.check_integrity(
+                    final_dest, expected_size=expected_size,
+                ):
+                    raise ValueError(
+                        "Integrity check failed: size does not match"
+                    )
 
             elapsed = time.monotonic() - start_time
             return DownloadResult(
@@ -419,6 +445,7 @@ class Downloader:
                 speed=total_downloaded / elapsed if elapsed > 0 else 0,
                 success=True,
                 message="OK",
+                checksum=checksum,
             )
 
         except _AlreadyDownloaded as ad:
