@@ -12,10 +12,18 @@ from cosmo_dl.registry.registry import Registry
 console = Console()
 
 
-@click.group("source")
-def source_cmd() -> None:
-    """Browse simulation data sources (like a directory tree)."""
-    pass
+def _status_str(node) -> str:
+    """Return the status string for a node.
+
+    - Empty string when already loaded or when the node has no lazy loader
+      (i.e. it's a permanent leaf / informational entry like Auriga).
+    - ``"lazy"`` when the node has a loader that hasn't been called yet.
+    """
+    if node.is_loaded():
+        return ""
+    if node._loader is not None:
+        return "lazy"
+    return ""
 
 
 def _render_metadata(node) -> None:
@@ -68,7 +76,11 @@ def _build_tree(node, tree: Tree | None = None) -> Tree:
             loaded = child.is_loaded()
             count = child.child_count
             count_str = f" [dim]({count})[/dim]" if count > 0 else ""
-            lazy_str = " [dim]\\[lazy][/dim]" if not loaded else ""
+            lazy_str = (
+                f" [dim]\\[{_status_str(child)}][/dim]"
+                if not loaded and child._loader is not None
+                else ""
+            )
 
             type_icons = {
                 "group": "📁",
@@ -120,17 +132,17 @@ def _show_node_info(node) -> None:
                 console.print(f"  [dim]Parent sim:[/dim]   {parent}")
 
 
-@source_cmd.command("list")
+@click.command("source")
 @click.argument("path", required=False, default="")
-def source_list(path: str) -> None:
-    """List contents of a source tree node.
+def source_cmd(path: str) -> None:
+    """Browse simulation data sources.
 
     \b
     Examples:
-      cosmo-dl source list               # show all root groups
-      cosmo-dl source list TNG           # show TNG sub-groups
-      cosmo-dl source list TNG/TNG50     # show TNG50 simulations
-      cosmo-dl source list TNG/TNG50/TNG50-1  # show file categories
+      cosmo-dl source                 # show all root groups
+      cosmo-dl source TNG             # show TNG sub-groups
+      cosmo-dl source TNG/TNG50       # show TNG50 simulations
+      cosmo-dl source TNG/TNG50/TNG50-1  # show file categories
     """
     reg = Registry()
 
@@ -145,16 +157,13 @@ def source_list(path: str) -> None:
 
         for name in sorted(roots.keys()):
             root = roots[name]
-            loaded = root.is_loaded()
             count = root.child_count
             count_str = str(count) if count > 0 else "—"
-            loaded_str = "" if loaded else "lazy"
-            table.add_row(f"{name}/", count_str, root.description, loaded_str)
+            table.add_row(f"{name}/", count_str, root.description, _status_str(root))
 
         console.print(table)
         console.print(
-            f"\n  [dim]{len(roots)} source(s). "
-            "Use [bold]source list <name>[/bold] to explore.[/dim]"
+            f"\n  [dim]{len(roots)} source(s). Use [bold]source <name>[/bold] to explore.[/dim]"
         )
         return
 
@@ -183,73 +192,5 @@ def source_list(path: str) -> None:
         loaded_children = [c for c in children.values() if c.node_type != "dataset"]
         console.print(
             f"\n  [dim]{len(loaded_children)} item(s). "
-            f"Use [bold]source list {path}/<name>[/bold] to drill down.[/dim]"
+            f"Use [bold]source {path}/<name>[/bold] to drill down.[/dim]"
         )
-
-
-@source_cmd.command("info")
-@click.argument("path")
-def source_info(path: str) -> None:
-    """Show detailed info about a source tree node."""
-    reg = Registry()
-    node = reg.get_node(path)
-    if node is None:
-        console.print(f"[red]Path not found:[/red] {path!r}")
-        raise SystemExit(1)
-
-    console.print(f"[bold]Path:[/bold]        {node.path}/")
-    console.print(f"[bold]Type:[/bold]        {node.node_type}")
-    console.print(f"[bold]Description:[/bold] {node.description}")
-
-    _render_metadata(node)
-
-    if node.node_type == "dataset" and node.url:
-        console.print(f"[bold]URL:[/bold]         {node.url}")
-
-    if node.auth is not None:
-        auth = node.auth
-        console.print(f"[bold]Auth:[/bold]        {auth.type if hasattr(auth, 'type') else 'yes'}")
-
-    children = node.list_children()
-    if children:
-        console.print(f"[bold]Children:[/bold]    {len(children)}")
-        items = list(children.items())
-        for child_name, child in items[:30]:
-            console.print(f"  - {child_name}  [dim]({child.node_type})[/dim]")
-        if len(items) > 30:
-            console.print(f"  [dim]... and {len(items) - 30} more[/dim]")
-    else:
-        console.print("[bold]Children:[/bold]    none")
-
-
-@source_cmd.command("discover")
-@click.argument("path", required=False, default="")
-def source_discover(path: str) -> None:
-    """Force lazy-load a node's children.
-
-    \b
-    Example:
-      cosmo-dl source discover TNG         # load TNG sub-groups
-      cosmo-dl source discover TNG/TNG50   # load TNG50 simulations
-    """
-    reg = Registry()
-    if not path:
-        console.print("[dim]Usage: cosmo-dl source discover <path>[/dim]")
-        return
-
-    node = reg.get_node(path)
-    if node is None:
-        console.print(f"[red]Path not found:[/red] {path!r}")
-        raise SystemExit(1)
-
-    if node.is_loaded():
-        console.print(
-            f"{path}/ is already loaded ([dim]{len(node.list_children())} children[/dim])."
-        )
-        return
-
-    console.print(f"Loading [bold]{path}/[/bold] ...")
-    children = node.list_children()
-    console.print(
-        f"Loaded [green]{len(children)}[/green] child(ren). [dim]Loaded: {node.is_loaded()}[/dim]"
-    )

@@ -2,7 +2,6 @@
 
 import rich_click as click
 
-from cosmo_dl.cli.auth_cmd import auth_cmd
 from cosmo_dl.cli.config_cmd import config_cmd
 from cosmo_dl.cli.download_cmd import download_cmd
 from cosmo_dl.cli.explore_cmd import explore_cmd
@@ -16,7 +15,6 @@ def cli() -> None:
     pass
 
 
-cli.add_command(auth_cmd)
 cli.add_command(config_cmd)
 cli.add_command(download_cmd)
 cli.add_command(explore_cmd)

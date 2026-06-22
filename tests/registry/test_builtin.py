@@ -709,8 +709,8 @@ def test_tng_fallback_offline(monkeypatch):
     assert "TNG50-1" in tng50_children
 
 
-def test_tng_source_info_command():
-    """source info should work on simulation nodes."""
+def test_tng_source_list_command():
+    """source on a simulation node should show metadata."""
     import os
 
     os.environ["COSMO_DL_OFFLINE"] = "true"
@@ -719,10 +719,10 @@ def test_tng_source_info_command():
     from cosmo_dl.cli.main import cli
 
     runner = CliRunner()
-    result = runner.invoke(cli, ["source", "info", "TNG/TNG50/TNG50-1"])
+    result = runner.invoke(cli, ["source", "TNG/TNG50/TNG50-1"])
     assert result.exit_code == 0
-    assert "simulation" in result.output.lower()
     assert "TNG50-1" in result.output
+    assert "snapshots" in result.output.lower()
 
 
 # ---------------------------------------------------------------------------
