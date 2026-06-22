@@ -1,7 +1,7 @@
 """CLI command: source — browse the simulation source tree."""
 from __future__ import annotations
 
-import click
+import rich_click as click
 from rich.console import Console
 from rich.table import Table
 from rich.tree import Tree

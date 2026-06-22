@@ -1,5 +1,5 @@
 """CLI command: explore."""
-import click
+import rich_click as click
 
 from cosmo_dl.api import explore as api_explore
 

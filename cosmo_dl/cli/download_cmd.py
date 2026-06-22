@@ -1,5 +1,10 @@
 """CLI command: download."""
-import click
+from __future__ import annotations
+
+import os
+import signal
+
+import rich_click as click
 from rich.console import Console
 
 from cosmo_dl.api import download as api_download
@@ -7,6 +12,9 @@ from cosmo_dl.api import explore as api_explore
 from cosmo_dl.engine.file_manager import FileManager
 
 console = Console()
+
+# Track whether the user has pressed Ctrl+C
+_interrupted = False
 
 
 @click.command("download")
@@ -30,6 +38,40 @@ console = Console()
 def download_cmd(target, workers, file_workers, limit, output, resume,
                  hash_algo, recursive, include):
     """Download simulation data from URL or source/dataset."""
+    # ------------------------------------------------------------------
+    # Install a SIGINT handler so a second Ctrl+C hard-exits immediately.
+    # Using ``os._exit`` avoids the noisy threading-shutdown traceback
+    # that Python prints when threads are joined during interpreter exit.
+    # ------------------------------------------------------------------
+    def _on_interrupt(signum, frame):
+        global _interrupted
+        if _interrupted:
+            os._exit(130)
+        _interrupted = True
+        console.print(
+            "\n[yellow]Interrupted — waiting for in-flight work to finish...[/yellow]"
+        )
+        console.print("[dim](Press Ctrl+C again to force quit)[/dim]")
+
+    original_handler = signal.signal(signal.SIGINT, _on_interrupt)
+    try:
+        _do_download(target, workers, file_workers, limit, output, resume,
+                     hash_algo, recursive, include)
+    except KeyboardInterrupt:
+        console.print(
+            "\n[yellow]Download interrupted.[/yellow]"
+        )
+        console.print(
+            "[dim]Partial progress saved — resume with the same command.[/dim]"
+        )
+        os._exit(130)
+    finally:
+        signal.signal(signal.SIGINT, original_handler)
+
+
+def _do_download(target, workers, file_workers, limit, output, resume,
+                 hash_algo, recursive, include):
+    """Actual download logic, factored out for clean interrupt handling."""
     if recursive and (target.startswith("http://") or target.startswith("https://")):
         console.print(f"[dim]Exploring {target} ...[/dim]")
         files = api_explore(target, recursive=True, include=include)

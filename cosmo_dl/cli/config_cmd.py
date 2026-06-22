@@ -1,7 +1,7 @@
 """CLI command: config — manage cosmo-dl settings."""
 from __future__ import annotations
 
-import click
+import rich_click as click
 
 from cosmo_dl.config import get, list_keys, set_value, unset
 

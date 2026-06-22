@@ -1035,9 +1035,9 @@ class Downloader:
                 self._save_chunk_meta(part_path, total, _completed)
 
             def _poll_progress() -> None:
-                """Background thread: report progress at ~4 Hz."""
+                """Background thread: report progress at ~2 Hz."""
                 while not _stop_event.is_set():
-                    _stop_event.wait(0.25)
+                    _stop_event.wait(0.5)
                     if progress is not None:
                         with _dl_lock:
                             cur = downloaded

@@ -1,5 +1,5 @@
 """CLI entry point for cosmo-dl."""
-import click
+import rich_click as click
 
 from cosmo_dl.cli.auth_cmd import auth_cmd
 from cosmo_dl.cli.config_cmd import config_cmd

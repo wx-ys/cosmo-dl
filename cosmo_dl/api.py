@@ -6,11 +6,20 @@ and :func:`download`.
 from __future__ import annotations
 
 import threading
-import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from urllib.parse import urlparse
 
+from rich.console import Console
+from rich.progress import (
+    BarColumn,
+    DownloadColumn,
+    Progress,
+    SpinnerColumn,
+    TextColumn,
+    TimeRemainingColumn,
+    TransferSpeedColumn,
+)
 from tqdm import tqdm as _tqdm
 
 from cosmo_dl.engine.downloader import MB, Downloader
@@ -18,6 +27,8 @@ from cosmo_dl.engine.explorer import URLExplorer
 from cosmo_dl.engine.session import Session
 from cosmo_dl.engine.types import AuthConfig, DownloadResult, FileEntry
 from cosmo_dl.registry.registry import Registry
+
+console = Console()
 
 # ---------------------------------------------------------------------------
 # Module-level singleton
@@ -152,14 +163,15 @@ def explore(
             session.close()
 
 
+# Reused in download_cmd.py
 def _fmt_speed(bytes_per_second: float) -> str:
     """Format a bytes-per-second rate as a human-readable string."""
     if bytes_per_second >= 1024 * 1024:
-        return f"{bytes_per_second / (1024 * 1024):.1f}MB/s"
+        return f"{bytes_per_second / (1024 * 1024):.1f} MB/s"
     elif bytes_per_second >= 1024:
-        return f"{bytes_per_second / 1024:.0f}KB/s"
+        return f"{bytes_per_second / 1024:.0f} KB/s"
     elif bytes_per_second > 0:
-        return f"{bytes_per_second:.0f}B/s"
+        return f"{bytes_per_second:.0f} B/s"
     return ""
 
 
@@ -265,91 +277,75 @@ def download(
         # Auto-adjust per-file workers when using file-level concurrency.
         # File-level parallelism is more efficient for many small files;
         # chunk-level multi-threading is only beneficial for large files.
-        if file_workers > 1 and len(url_dests) > 1:
-            per_file_workers = 1
-        else:
-            per_file_workers = workers
+        per_file_workers = 1 if (file_workers > 1 and len(url_dests) > 1) else workers
 
         # --- Sequential path (single file or file_workers=1) ---------------
         if file_workers <= 1 or len(url_dests) <= 1:
             results: list[DownloadResult] = []
             single_file = len(url_dests) <= 1
 
-            # For single files, show a byte-level progress bar so the user
-            # can see download speed and progress in real time.
-            byte_bar: _tqdm | None = None
+            # Rich progress display for single files — gives us coloured bars,
+            # smooth speed tracking, and an animated spinner, all managed
+            # by rich itself (no manual speed book-keeping).
+            rich_progress: Progress | None = None
+            task_id: int | None = None
 
-            _speed_t0 = time.monotonic()
-            _speed_last_bytes = 0
-            _current_displayed: int = 0
-
-            def _progress_cb(downloaded: int, total: int) -> None:
-                nonlocal _speed_t0, _speed_last_bytes, _current_displayed
-
-                if byte_bar is not None:
-                    # Update the byte-level bar
-                    if total > 0 and byte_bar.total != total:
-                        byte_bar.total = total
-                        byte_bar.refresh()
-                    delta = downloaded - _current_displayed
-                    if delta > 0:
-                        byte_bar.update(delta)
-                        _current_displayed = downloaded
-
-                now = time.monotonic()
-                elapsed = now - _speed_t0
-                if elapsed >= 0.5:
-                    speed = ((downloaded - _speed_last_bytes) / elapsed
-                             if elapsed > 0 else 0)
-                    speed_str = _fmt_speed(speed)
-                    if byte_bar is not None:
-                        byte_bar.set_postfix_str(f"{speed_str}")
-                    _speed_t0 = now
-                    _speed_last_bytes = downloaded
-
-            for url, relpath, local_dest in url_dests:
-                fname = local_dest.name
-
-                _speed_t0 = time.monotonic()
-                _speed_last_bytes = 0
-                _current_displayed = 0
-
-                # For single files, show a byte-level progress bar
-                if single_file:
-                    byte_bar = _tqdm(
-                        total=None,
-                        desc=fname[:30],
-                        unit="B",
-                        unit_scale=True,
-                        unit_divisor=1024,
-                        leave=True,
-                    )
-                else:
-                    byte_bar = None
-                    # For multi-file sequential, show file name as we start
-                    _tqdm.write(f"  ... {fname}")
-
-                result = downloader.download(
-                    url,
-                    local_dest,
-                    resume=resume,
-                    workers=per_file_workers,
-                    chunk_size=chunk_size,
-                    progress=_progress_cb if progress is None else progress,  # type: ignore[arg-type]
-                    expected_hash=expected_hash,
-                    expected_size=expected_size,
+            if single_file and progress is None:
+                rich_progress = Progress(
+                    SpinnerColumn(),
+                    TextColumn("[bold blue]{task.fields[filename]}"),
+                    BarColumn(bar_width=None, pulse_style="bar.back"),
+                    "[progress.percentage]{task.percentage:>3.0f}%",
+                    "•",
+                    DownloadColumn(),
+                    "•",
+                    TransferSpeedColumn(),
+                    "•",
+                    TimeRemainingColumn(),
+                    console=console,
+                    expand=True,
                 )
 
-                # Close the byte bar if active
-                if byte_bar is not None:
-                    if result.success:
-                        byte_bar.set_postfix_str("done")
+            def _progress_cb(downloaded: int, total: int) -> None:
+                """Forward engine progress updates to the rich display."""
+                if rich_progress is not None and task_id is not None:
+                    if total > 0:
+                        rich_progress.update(task_id, total=total, completed=downloaded)
                     else:
-                        byte_bar.set_postfix_str("FAILED")
-                    byte_bar.close()
+                        rich_progress.update(task_id, completed=downloaded, total=downloaded)
+
+            for url, _relpath, local_dest in url_dests:
+                fname = local_dest.name
+
+                if rich_progress is not None:
+                    task_id = rich_progress.add_task(
+                        "download", filename=fname[:50], total=None, start=True,
+                    )
+                    rich_progress.start()
+                elif not single_file:
+                    # Multi-file sequential without custom progress: print filename
+                    _tqdm.write(f"  ... {fname}")
+
+                try:
+                    result = downloader.download(
+                        url,
+                        local_dest,
+                        resume=resume,
+                        workers=per_file_workers,
+                        chunk_size=chunk_size,
+                        progress=_progress_cb if progress is None else progress,  # type: ignore[arg-type]
+                        expected_hash=expected_hash,
+                        expected_size=expected_size,
+                    )
+                finally:
+                    if rich_progress is not None:
+                        rich_progress.stop()
 
                 if not result.success:
-                    _tqdm.write(f"  FAIL  {local_dest}\n        {result.message}")
+                    console.print(
+                        f"  [red]FAIL[/red]  {local_dest}\n"
+                        f"        {result.message}"
+                    )
                 results.append(result)
 
             if len(results) == 1:
@@ -365,7 +361,7 @@ def download(
 
         with ThreadPoolExecutor(max_workers=file_workers) as executor:
             future_to_info: dict = {}
-            for url, relpath, local_dest in url_dests:
+            for url, _relpath, local_dest in url_dests:
                 local_dest.parent.mkdir(parents=True, exist_ok=True)
                 fut = executor.submit(
                     downloader.download,
