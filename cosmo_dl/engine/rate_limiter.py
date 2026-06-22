@@ -1,7 +1,7 @@
 """Token bucket rate limiter for download bandwidth throttling."""
-import time
 import re
 import threading
+import time
 
 
 class RateLimiter:

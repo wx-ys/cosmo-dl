@@ -1,6 +1,8 @@
 """CLI command: explore."""
 import click
+
 from cosmo_dl.api import explore as api_explore
+
 
 @click.command("explore")
 @click.argument("url")

@@ -1,9 +1,9 @@
 """Registry class for managing simulation sources as a hierarchical tree."""
 from __future__ import annotations
 
-from cosmo_dl.registry.source import SourceNode, SimulationSource
 from cosmo_dl.registry.builtin import get_builtin_roots
 from cosmo_dl.registry.loader import load_sources_from_yaml
+from cosmo_dl.registry.source import SimulationSource, SourceNode
 
 
 class Registry:

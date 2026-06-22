@@ -1,6 +1,7 @@
 """YAML source loader with env-var substitution."""
 import os
 import re
+
 import yaml
 
 from cosmo_dl.engine.types import AuthConfig
@@ -19,7 +20,7 @@ def load_sources_from_yaml(path: str) -> list[SimulationSource]:
     if not os.path.isfile(path):
         return []
 
-    with open(path, "r") as fh:
+    with open(path) as fh:
         raw_text = fh.read()
 
     # Substitute ${VAR} with environment variable values.

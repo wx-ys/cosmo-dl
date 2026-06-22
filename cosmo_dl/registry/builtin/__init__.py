@@ -1,9 +1,9 @@
 """Built-in simulation source definitions."""
-from cosmo_dl.registry.source import SourceNode, SimulationSource
-from cosmo_dl.registry.builtin.fire import build_fire2_root
 from cosmo_dl.registry.builtin.auriga import build_auriga_root
 from cosmo_dl.registry.builtin.eagle import build_eagle_root
+from cosmo_dl.registry.builtin.fire import build_fire2_root
 from cosmo_dl.registry.builtin.tng import build_tng_root
+from cosmo_dl.registry.source import SimulationSource, SourceNode
 
 
 def get_builtin_roots() -> list[SourceNode]:

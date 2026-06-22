@@ -1,10 +1,12 @@
 """CLI entry point for cosmo-dl."""
 import click
+
 from cosmo_dl.cli.auth_cmd import auth_cmd
 from cosmo_dl.cli.config_cmd import config_cmd
 from cosmo_dl.cli.download_cmd import download_cmd
 from cosmo_dl.cli.explore_cmd import explore_cmd
 from cosmo_dl.cli.source_cmd import source_cmd
+
 
 @click.group()
 @click.version_option(version="0.1.0", prog_name="cosmo-dl")

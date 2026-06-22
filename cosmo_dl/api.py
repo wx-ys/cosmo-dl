@@ -5,20 +5,19 @@ and :func:`download`.
 """
 from __future__ import annotations
 
-import os
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from urllib.parse import urlparse
 
-from cosmo_dl.engine.downloader import Downloader, MB
+from tqdm import tqdm as _tqdm
+
+from cosmo_dl.engine.downloader import MB, Downloader
 from cosmo_dl.engine.explorer import URLExplorer
-from cosmo_dl.engine.file_manager import FileManager
 from cosmo_dl.engine.session import Session
 from cosmo_dl.engine.types import AuthConfig, DownloadResult, FileEntry
 from cosmo_dl.registry.registry import Registry
-from tqdm import tqdm as _tqdm
 
 # ---------------------------------------------------------------------------
 # Module-level singleton

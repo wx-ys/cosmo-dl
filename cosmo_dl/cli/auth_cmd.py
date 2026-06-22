@@ -1,9 +1,16 @@
 """CLI command: auth — manage authentication tokens for data sources."""
 from __future__ import annotations
 
-import click
+import os
 
-from cosmo_dl.config import get as config_get, set_value, unset
+import click
+from rich.console import Console
+from rich.table import Table
+
+from cosmo_dl.config import get as config_get
+from cosmo_dl.config import set_value, unset
+
+console = Console()
 
 
 @click.group("auth")
@@ -29,7 +36,7 @@ def auth_set(key: str, token: str) -> None:
     TOKEN is the token value.
     """
     set_value(key, token)
-    click.echo(f"✓ Stored {key}.")
+    console.print(f"[green]✓[/green] Stored [bold]{key}[/bold].")
 
 
 @auth_cmd.command("unset")
@@ -37,16 +44,17 @@ def auth_set(key: str, token: str) -> None:
 def auth_unset(key: str) -> None:
     """Remove a stored authentication token."""
     unset(key)
-    click.echo(f"✓ Removed {key}.")
+    console.print(f"[green]✓[/green] Removed [bold]{key}[/bold].")
 
 
 @auth_cmd.command("status")
 def auth_status() -> None:
     """Show authentication status for known sources."""
-    import os
-
-    click.echo(f"{'Key':<25s} {'Status':<20s} {'Preview':<30s}")
-    click.echo("-" * 75)
+    table = Table(title="Authentication Status")
+    table.add_column("Key", style="bold")
+    table.add_column("Label", style="dim")
+    table.add_column("Status")
+    table.add_column("Preview", style="dim")
 
     keys = [
         ("tng_api_key", "TNG API"),
@@ -58,9 +66,11 @@ def auth_status() -> None:
     for key, label in keys:
         token = os.environ.get(f"COSMO_{key.upper()}", "") or config_get(key)
         if token:
-            status = click.style("✓ configured", fg="green")
+            status = "[green]✓ configured[/green]"
             preview = f"{token[:8]}...{token[-4:]}" if len(token) > 16 else "(hidden)"
         else:
-            status = click.style("✗ not set", fg="yellow")
+            status = "[yellow]✗ not set[/yellow]"
             preview = f"use 'cosmo-dl auth set {key} <token>'"
-        click.echo(f"{key:<25s} {status:<20s} {preview:<30s}")
+        table.add_row(key, label, status, preview)
+
+    console.print(table)

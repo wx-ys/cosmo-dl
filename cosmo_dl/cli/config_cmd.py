@@ -2,7 +2,8 @@
 from __future__ import annotations
 
 import click
-from cosmo_dl.config import get, set_value, unset, show, list_keys
+
+from cosmo_dl.config import get, list_keys, set_value, unset
 
 
 @click.group("config")
@@ -44,16 +45,17 @@ def config_get(key: str) -> None:
         click.echo(f"{key} = {val}")
         # Indicate the source
         import os
+
         from cosmo_dl.config import _ENV_KEY_MAP, _load_dotenvs, _load_toml
         env_var = _ENV_KEY_MAP.get(key, key.upper())
         if os.environ.get(env_var):
             click.echo(f"  (source: environment variable {env_var})")
         elif env_var in _load_dotenvs():
-            click.echo(f"  (source: .env file)")
+            click.echo("  (source: .env file)")
         elif key in _load_toml():
-            click.echo(f"  (source: config file ~/.config/cosmo-dl/config.toml)")
+            click.echo("  (source: config file ~/.config/cosmo-dl/config.toml)")
         else:
-            click.echo(f"  (source: default)")
+            click.echo("  (source: default)")
     else:
         click.echo(f"{key} is not set.")
 
@@ -70,6 +72,7 @@ def config_unset(key: str) -> None:
 def config_show() -> None:
     """Show all configuration values and their sources."""
     import os
+
     from cosmo_dl.config import _ENV_KEY_MAP, _load_dotenvs, _load_toml
 
     dotenv = _load_dotenvs()

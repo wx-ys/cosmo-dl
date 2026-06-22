@@ -1,9 +1,9 @@
 """Registry source types — SourceNode tree and legacy SimulationSource."""
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Callable, Literal
-
+from typing import Literal
 
 # ---------------------------------------------------------------------------
 # SourceNode — hierarchical source tree

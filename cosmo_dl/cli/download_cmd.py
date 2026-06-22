@@ -1,7 +1,13 @@
 """CLI command: download."""
 import click
-from cosmo_dl.api import download as api_download, explore as api_explore
+from rich.console import Console
+
+from cosmo_dl.api import download as api_download
+from cosmo_dl.api import explore as api_explore
 from cosmo_dl.engine.file_manager import FileManager
+
+console = Console()
+
 
 @click.command("download")
 @click.argument("target")
@@ -21,44 +27,92 @@ from cosmo_dl.engine.file_manager import FileManager
               help="Recursively explore and download from URL (default: disabled).")
 @click.option("--include", default="*",
               help="Pattern to include files when recursively exploring (default: '*').")
-def download_cmd(target, workers, file_workers, limit, output, resume, hash_algo, recursive, include):
+def download_cmd(target, workers, file_workers, limit, output, resume,
+                 hash_algo, recursive, include):
     """Download simulation data from URL or source/dataset."""
     if recursive and (target.startswith("http://") or target.startswith("https://")):
-        click.echo(f"Exploring {target} ...")
+        console.print(f"[dim]Exploring {target} ...[/dim]")
         files = api_explore(target, recursive=True, include=include)
         if not files:
-            click.echo("No files found.")
+            console.print("[yellow]No files found.[/yellow]")
             return
-        click.echo(f"Found {len(files)} file(s). Starting download...\n")
+        console.print(f"Found [green]{len(files)}[/green] file(s). Starting download...\n")
         from tqdm import tqdm
         succeeded = 0
         failed = 0
         with tqdm(total=len(files), desc="Files", unit="file") as pbar:
             for entry in files:
-                local_path = FileManager.mirror_path(entry.url, base_url=target, local_root=output)
+                local_path = FileManager.mirror_path(
+                    entry.url, base_url=target, local_root=output,
+                )
                 local_path.parent.mkdir(parents=True, exist_ok=True)
                 try:
-                    result = api_download(entry.url, local_path, workers=workers, file_workers=file_workers, rate_limit=limit, resume=resume, expected_hash=hash_algo)
+                    result = api_download(
+                        entry.url, local_path,
+                        workers=workers, file_workers=file_workers,
+                        rate_limit=limit, resume=resume,
+                        expected_hash=hash_algo,
+                    )
                     if result.success:
                         succeeded += 1
                     else:
                         failed += 1
-                        click.echo(f"  FAILED: {entry.name}: {result.message}")
+                        console.print(f"  [red]FAILED:[/red] {entry.name}: {result.message}")
                 except Exception as e:
                     failed += 1
-                    click.echo(f"  ERROR: {entry.name}: {e}")
+                    console.print(f"  [red]ERROR:[/red] {entry.name}: {e}")
                 pbar.update(1)
-        click.echo(f"\nDone. {succeeded} succeeded, {failed} failed.")
+        console.print(f"\nDone. [green]{succeeded}[/green] succeeded, [red]{failed}[/red] failed.")
     else:
-        result = api_download(target, output_dir=output, workers=workers, file_workers=file_workers, rate_limit=limit, resume=resume, expected_hash=hash_algo)
+        result = api_download(
+            target, output_dir=output,
+            workers=workers, file_workers=file_workers,
+            rate_limit=limit, resume=resume,
+            expected_hash=hash_algo,
+        )
         if isinstance(result, list):
             for r in result:
-                status = "OK" if r.success else f"FAILED: {r.message}"
-                click.echo(f"  {r.local_path}: {status}")
-                if r.checksum:
-                    click.echo(f"    {r.checksum}")
+                _print_result(r)
         else:
-            status = "OK" if result.success else f"FAILED: {result.message}"
-            click.echo(f"  {result.local_path}: {status}")
-            if result.checksum:
-                click.echo(f"    {result.checksum}")
+            _print_result(result)
+
+
+def _print_result(r) -> None:
+    """Print a single :class:`DownloadResult` with rich styling."""
+    if r.success:
+        size_str = _fmt_bytes(r.size)
+        speed_str = ""
+        if r.speed > 0:
+            speed_str = f" @ [cyan]{_fmt_speed(r.speed)}[/cyan]"
+        console.print(
+            f"  [green]✓[/green] {r.local_path}  "
+            f"[dim]({size_str}{speed_str})[/dim]"
+        )
+        if r.checksum:
+            algo, _, digest = r.checksum.partition(":")
+            console.print(f"    [dim]{algo}:[/dim] {digest}")
+    else:
+        console.print(f"  [red]✗ FAILED:[/red] {r.local_path}")
+        console.print(f"    [red]{r.message}[/red]")
+
+
+def _fmt_bytes(size: int) -> str:
+    """Format a byte count as a human-readable string."""
+    if size >= 1024 * 1024 * 1024:
+        return f"{size / (1024**3):.1f} GiB"
+    elif size >= 1024 * 1024:
+        return f"{size / (1024**2):.1f} MiB"
+    elif size >= 1024:
+        return f"{size / 1024:.0f} KiB"
+    return f"{size} B"
+
+
+def _fmt_speed(bytes_per_second: float) -> str:
+    """Format a bytes-per-second rate as a human-readable string."""
+    if bytes_per_second >= 1024 * 1024:
+        return f"{bytes_per_second / (1024 * 1024):.1f} MB/s"
+    elif bytes_per_second >= 1024:
+        return f"{bytes_per_second / 1024:.0f} KB/s"
+    elif bytes_per_second > 0:
+        return f"{bytes_per_second:.0f} B/s"
+    return ""

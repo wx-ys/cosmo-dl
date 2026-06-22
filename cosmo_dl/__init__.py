@@ -3,8 +3,8 @@
 __version__ = "0.1.0"
 
 from cosmo_dl.api import download, explore, list_sources
-from cosmo_dl.engine.types import DownloadResult, FileEntry, AuthConfig
-from cosmo_dl.registry.source import SimulationSource, DatasetInfo
+from cosmo_dl.engine.types import AuthConfig, DownloadResult, FileEntry
+from cosmo_dl.registry.source import DatasetInfo, SimulationSource
 
 __all__ = [
     "__version__",

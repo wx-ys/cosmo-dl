@@ -13,7 +13,6 @@ import logging
 import os
 import re
 import secrets
-import webbrowser
 from urllib.parse import urljoin
 
 import requests

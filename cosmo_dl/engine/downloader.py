@@ -1,21 +1,21 @@
 """Core download engine with resume, multi-threading, rate limiting, and integrity."""
 from __future__ import annotations
 
+import email.utils
 import json
 import logging
 import os
 import re
+import shutil
 import threading
 import time
-import shutil
-import email.utils
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Callable
 
-from cosmo_dl.engine.types import DownloadResult
 from cosmo_dl.engine.file_manager import FileManager
+from cosmo_dl.engine.types import DownloadResult
 
 logger = logging.getLogger(__name__)
 

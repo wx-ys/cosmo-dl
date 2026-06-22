@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
@@ -41,7 +40,7 @@ def _parse_dotenv(path: Path) -> dict[str, str]:
     result: dict[str, str] = {}
     if not path.is_file():
         return result
-    with open(path, "r") as f:
+    with open(path) as f:
         for line in f:
             line = line.strip()
             if not line or line.startswith("#"):
@@ -215,7 +214,7 @@ def load_tokens() -> dict[str, object]:
     if not _TOKEN_FILE.is_file():
         return {}
     try:
-        with open(_TOKEN_FILE, "r") as f:
+        with open(_TOKEN_FILE) as f:
             data = json.load(f)
     except Exception:
         return {}
