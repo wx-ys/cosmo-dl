@@ -99,11 +99,16 @@ def _do_download(
             console.print("[yellow]No files found.[/yellow]")
             return
         console.print(f"Found [green]{len(files)}[/green] file(s). Starting download...\n")
-        from tqdm import tqdm
+
+        from cosmo_dl.progress import MultiFileProgress
 
         succeeded = 0
         failed = 0
-        with tqdm(total=len(files), desc="Files", unit="file") as pbar:
+        display = MultiFileProgress(console=console)
+        for entry in files:
+            display.add_pending(entry.name)
+
+        with display:
             for entry in files:
                 local_path = FileManager.mirror_path(
                     entry.url,
@@ -111,28 +116,36 @@ def _do_download(
                     local_root=output,
                 )
                 local_path.parent.mkdir(parents=True, exist_ok=True)
+
+                cb = display.start_file(entry.name, total_size=entry.size)
                 try:
                     result = api_download(
                         entry.url,
                         local_path,
                         workers=workers,
-                        file_workers=file_workers,
+                        file_workers=1,  # sequential per-file in recursive mode
                         rate_limit=limit,
                         resume=resume,
                         expected_hash=hash_algo,
+                        progress=cb,
                     )
                     # When called per-file with a concrete dest, api_download
                     # always returns a single DownloadResult.
                     single: DownloadResult = result  # type: ignore[assignment]
                     if single.success:
                         succeeded += 1
+                        display.complete_file_with_size(
+                            entry.name, success=True, actual_size=single.size
+                        )
                     else:
                         failed += 1
+                        display.complete_file(entry.name, success=False)
                         console.print(f"  [red]FAILED:[/red] {entry.name}: {single.message}")
                 except Exception as e:
                     failed += 1
+                    display.complete_file(entry.name, success=False)
                     console.print(f"  [red]ERROR:[/red] {entry.name}: {e}")
-                pbar.update(1)
+
         console.print(f"\nDone. [green]{succeeded}[/green] succeeded, [red]{failed}[/red] failed.")
     else:
         result = api_download(

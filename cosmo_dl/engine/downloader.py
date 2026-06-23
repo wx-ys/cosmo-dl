@@ -16,6 +16,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 
+from urllib3.exceptions import IncompleteRead, ProtocolError
+
 from cosmo_dl.engine.file_manager import FileManager
 from cosmo_dl.engine.types import DownloadResult
 
@@ -832,100 +834,124 @@ class Downloader:
     ) -> tuple[int, Path]:
         """Stream download into *part_path*, then rename to *dest*.
 
+        Retries on transient connection errors (``IncompleteRead``,
+        ``ProtocolError``) — the partial data in the ``.part`` file is
+        preserved and the next attempt resumes via an HTTP Range request.
+
         Returns ``(bytes_downloaded, final_dest_path)``.
         """
-        headers: dict[str, str] = {}
-        if partial_size > 0:
-            headers["Range"] = f"bytes={partial_size}-"
-
-        mode = "ab" if partial_size > 0 else "wb"
+        max_attempts = 3
         downloaded = partial_size
+        dest_updated = dest  # may change when Content-Disposition is learned
+        cd_processed = False  # only process Content-Disposition once
+        last_modified: str | None = metadata.last_modified
 
-        with session.stream(url, headers=headers) as resp:
-            if resp.status_code == 404:
-                raise RuntimeError("HTTP 404 Not Found")
-            resp.raise_for_status()
+        for attempt in range(1, max_attempts + 1):
+            headers: dict[str, str] = {}
+            if downloaded > 0:
+                headers["Range"] = f"bytes={downloaded}-"
 
-            # Resolve total from response (stream may have per-response headers
-            # that differ from the pre-flight metadata probe).
-            total = metadata.total
-            if total <= 0:
-                cr = resp.headers.get("Content-Range")
-                if cr is not None:
-                    with contextlib.suppress(ValueError, IndexError):
-                        total = int(cr.rsplit("/", 1)[-1])
-                if total <= 0:
-                    cl = resp.headers.get("Content-Length")
-                    if cl is not None:
-                        total = int(cl)
+            mode = "ab" if downloaded > 0 else "wb"
 
-            # Capture filename from this response (TNG HEAD often omits
-            # Content-Disposition, so the pre-flight metadata probe may have
-            # missed it).  Three scenarios are handled here:
-            #   1. Real-name file exists & complete → fix mtime, skip
-            #   2. Real-name file exists, mtime wrong   → fix mtime, skip
-            #   3. URL-name file exists, real-name doesn't → rename + fix mtime, skip
-            cd_filename = _parse_content_disposition(resp.headers.get("Content-Disposition", ""))
-            resp_last_modified = resp.headers.get("Last-Modified")
-            if cd_filename:
-                real_dest = dest.parent / cd_filename
+            try:
+                with session.stream(url, headers=headers) as resp:
+                    if resp.status_code == 404:
+                        raise RuntimeError("HTTP 404 Not Found")
+                    resp.raise_for_status()
 
-                # Scenario 1 & 2: real-name file already exists and is complete
-                if total > 0 and real_dest.is_file() and real_dest.stat().st_size == total:
-                    _apply_last_modified(
-                        real_dest,
-                        resp_last_modified or metadata.last_modified,
-                    )
-                    if part_path.is_file():
-                        part_path.unlink()
-                    elapsed = time.monotonic() - start_time if start_time else 0
-                    raise _AlreadyDownloaded(total, elapsed, real_dest)
+                    # Resolve total from response.
+                    total = metadata.total
+                    if total <= 0:
+                        cr = resp.headers.get("Content-Range")
+                        if cr is not None:
+                            with contextlib.suppress(ValueError, IndexError):
+                                total = int(cr.rsplit("/", 1)[-1])
+                        if total <= 0:
+                            cl = resp.headers.get("Content-Length")
+                            if cl is not None:
+                                total = int(cl)
 
-                # Scenario 3: URL-derived name exists, real name doesn't.
-                # Rename the local file instead of re-downloading.
-                if (
-                    real_dest != dest
-                    and total > 0
-                    and dest.is_file()
-                    and dest.stat().st_size == total
-                ):
-                    os.replace(dest, real_dest)
-                    _apply_last_modified(
-                        real_dest,
-                        resp_last_modified or metadata.last_modified,
-                    )
-                    if part_path.is_file():
-                        part_path.unlink()
-                    elapsed = time.monotonic() - start_time if start_time else 0
-                    raise _AlreadyDownloaded(total, elapsed, real_dest)
+                    # Capture Last-Modified from response (prefer response
+                    # header over metadata probe).
+                    resp_lm = resp.headers.get("Last-Modified")
+                    if resp_lm:
+                        last_modified = resp_lm
 
-                dest = real_dest
+                    # Content-Disposition logic — only on first attempt.
+                    # On retries the filename won't have changed, and the
+                    # server may omit CD for Range requests anyway.
+                    if not cd_processed:
+                        cd_processed = True
+                        cd_filename = _parse_content_disposition(
+                            resp.headers.get("Content-Disposition", "")
+                        )
+                        if cd_filename:
+                            real_dest = dest.parent / cd_filename
 
-            # Stream body to disk
-            with open(part_path, mode) as fh:
-                for chunk in resp.iter_bytes(chunk_size=chunk_size):
-                    if limiter is not None:
-                        wait = limiter.acquire(len(chunk))
-                        if wait > 0:
-                            time.sleep(wait)
+                            # Scenario 1 & 2: real-name file already complete
+                            if (
+                                total > 0
+                                and real_dest.is_file()
+                                and real_dest.stat().st_size == total
+                            ):
+                                _apply_last_modified(real_dest, last_modified)
+                                if part_path.is_file():
+                                    part_path.unlink()
+                                elapsed = time.monotonic() - start_time if start_time else 0
+                                raise _AlreadyDownloaded(total, elapsed, real_dest)
 
-                    fh.write(chunk)
-                    downloaded += len(chunk)
+                            # Scenario 3: URL-derived name exists, real name doesn't
+                            if (
+                                real_dest != dest
+                                and total > 0
+                                and dest.is_file()
+                                and dest.stat().st_size == total
+                            ):
+                                os.replace(dest, real_dest)
+                                _apply_last_modified(real_dest, last_modified)
+                                if part_path.is_file():
+                                    part_path.unlink()
+                                elapsed = time.monotonic() - start_time if start_time else 0
+                                raise _AlreadyDownloaded(total, elapsed, real_dest)
 
-                    if progress is not None:
-                        effective_total = total if total > 0 else downloaded
-                        progress(downloaded, effective_total)
+                            dest_updated = real_dest
 
-        # Preserve Last-Modified from the actual download response when
-        # available (it takes precedence over the metadata probe).
-        last_modified: str | None = None
-        if hasattr(resp, "headers"):
-            last_modified = resp.headers.get("Last-Modified") or metadata.last_modified
-        else:
-            last_modified = metadata.last_modified
+                    # Stream body to disk
+                    with open(part_path, mode) as fh:
+                        for chunk in resp.iter_bytes(chunk_size=chunk_size):
+                            if limiter is not None:
+                                wait = limiter.acquire(len(chunk))
+                                if wait > 0:
+                                    time.sleep(wait)
 
-        self._finalize_download(part_path, dest, last_modified)
-        return downloaded, dest
+                            fh.write(chunk)
+                            downloaded += len(chunk)
+
+                            if progress is not None:
+                                effective_total = total if total > 0 else downloaded
+                                progress(downloaded, effective_total)
+
+                # Success — finalize and return
+                self._finalize_download(part_path, dest_updated, last_modified)
+                return downloaded, dest_updated
+
+            except (IncompleteRead, ProtocolError) as exc:
+                if attempt == max_attempts:
+                    raise
+                logger.warning(
+                    "Download interrupted after %.1f MB: %s — retrying (attempt %d/%d)…",
+                    downloaded / (1024 * 1024),
+                    exc,
+                    attempt + 1,
+                    max_attempts,
+                )
+                time.sleep(2 ** (attempt - 1))
+                # Re-read .part file size — it may have grown from this attempt
+                if part_path.is_file():
+                    downloaded = part_path.stat().st_size
+
+        # Should be unreachable — the last attempt always raises.
+        raise RuntimeError("Download failed after all retries")
 
     # ------------------------------------------------------------------
     # Multi-threaded engine

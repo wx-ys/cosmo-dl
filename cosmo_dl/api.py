@@ -12,22 +12,12 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from rich.console import Console
-from rich.progress import (
-    BarColumn,
-    DownloadColumn,
-    Progress,
-    SpinnerColumn,
-    TaskID,
-    TextColumn,
-    TimeRemainingColumn,
-    TransferSpeedColumn,
-)
-from tqdm import tqdm as _tqdm
 
 from cosmo_dl.engine.downloader import MB, Downloader
 from cosmo_dl.engine.explorer import URLExplorer
 from cosmo_dl.engine.session import Session
 from cosmo_dl.engine.types import AuthConfig, DownloadResult, FileEntry
+from cosmo_dl.progress import MultiFileProgress, SingleFileProgress
 from cosmo_dl.registry.registry import Registry
 
 console = Console()
@@ -285,52 +275,22 @@ def download(
         # --- Sequential path (single file or file_workers=1) ---------------
         if file_workers <= 1 or len(url_dests) <= 1:
             results: list[DownloadResult] = []
-            single_file = len(url_dests) <= 1
-
-            # Rich progress display for single files — gives us coloured bars,
-            # smooth speed tracking, and an animated spinner, all managed
-            # by rich itself (no manual speed book-keeping).
-            rich_progress: Progress | None = None
-            task_id: TaskID | None = None
-
-            if single_file and progress is None:
-                rich_progress = Progress(
-                    SpinnerColumn(),
-                    TextColumn("[bold blue]{task.fields[filename]}"),
-                    BarColumn(bar_width=None, pulse_style="bar.back"),
-                    "[progress.percentage]{task.percentage:>3.0f}%",
-                    "•",
-                    DownloadColumn(),
-                    "•",
-                    TransferSpeedColumn(),
-                    "•",
-                    TimeRemainingColumn(),
-                    console=console,
-                    expand=True,
-                )
-
-            def _progress_cb(downloaded: int, total: int) -> None:
-                """Forward engine progress updates to the rich display."""
-                if rich_progress is not None and task_id is not None:
-                    if total > 0:
-                        rich_progress.update(task_id, total=total, completed=downloaded)
-                    else:
-                        rich_progress.update(task_id, completed=downloaded, total=downloaded)
 
             for url, _relpath, local_dest in url_dests:
                 fname = local_dest.name
 
-                if rich_progress is not None:
-                    task_id = rich_progress.add_task(
-                        "download",
-                        filename=fname[:50],
-                        total=None,
-                        start=True,
+                if progress is not None:
+                    # User-provided callback — use directly, no built-in display.
+                    cb = progress
+                    file_display = None
+                else:
+                    file_display = SingleFileProgress(
+                        fname,
+                        worker_count=per_file_workers,
+                        console=console,
                     )
-                    rich_progress.start()
-                elif not single_file:
-                    # Multi-file sequential without custom progress: print filename
-                    _tqdm.write(f"  ... {fname}")
+                    file_display.__enter__()
+                    cb = file_display.callback
 
                 try:
                     result = downloader.download(
@@ -339,13 +299,13 @@ def download(
                         resume=resume,
                         workers=per_file_workers,
                         chunk_size=chunk_size,
-                        progress=_progress_cb if progress is None else progress,  # type: ignore[arg-type]
+                        progress=cb,  # type: ignore[arg-type]
                         expected_hash=expected_hash,
                         expected_size=expected_size,
                     )
                 finally:
-                    if rich_progress is not None:
-                        rich_progress.stop()
+                    if file_display is not None:
+                        file_display.__exit__(None, None, None)
 
                 if not result.success:
                     console.print(f"  [red]FAIL[/red]  {local_dest}\n        {result.message}")
@@ -358,58 +318,99 @@ def download(
         # --- Concurrent path (file_workers > 1, multiple files) -----------
         concurrent_results: list[DownloadResult] = []
         results_lock = threading.Lock()
-        n_failed = 0
 
-        pbar = _tqdm(total=len(url_dests), desc="Files", unit="file")
+        # ------------------------------------------------------------------
+        # Pre-fetch Content-Length for every URL via parallel HEAD requests
+        # so each file bar and the aggregate bar can show real totals.
+        # ------------------------------------------------------------------
+        grand_total = 0
+        total_known = True
+        file_sizes: dict[str, int | None] = {}
 
-        with ThreadPoolExecutor(max_workers=file_workers) as executor:
-            future_to_info: dict = {}
-            for url, _relpath, local_dest in url_dests:
-                local_dest.parent.mkdir(parents=True, exist_ok=True)
-                fut = executor.submit(
-                    downloader.download,
-                    url,
-                    local_dest,
-                    resume=resume,
-                    workers=per_file_workers,
-                    chunk_size=chunk_size,
-                    progress=None,  # per-chunk callbacks disabled in concurrent mode
-                    expected_hash=expected_hash,
-                    expected_size=expected_size,
-                )
-                future_to_info[fut] = (url, local_dest)
+        def _fetch_content_length(url: str) -> int | None:
+            """Return Content-Length for *url* (HEAD request), or None."""
+            try:
+                resp = session.head(url)
+                cl = resp.headers.get("Content-Length")
+                if cl is not None:
+                    return int(cl)
+            except Exception:
+                pass
+            return None
 
-            for future in as_completed(future_to_info):
-                url, local_dest = future_to_info[future]
-                try:
-                    result = future.result()
-                except Exception as exc:
-                    result = DownloadResult(
-                        url=url,
-                        local_path=str(local_dest),
-                        size=0,
-                        elapsed=0,
-                        speed=0,
-                        success=False,
-                        message=str(exc),
+        with ThreadPoolExecutor(max_workers=min(file_workers, len(url_dests))) as head_executor:
+            size_futures = {
+                head_executor.submit(_fetch_content_length, url): (url, local_dest)
+                for url, _, local_dest in url_dests
+            }
+            for head_future in as_completed(size_futures):
+                url, local_dest = size_futures[head_future]
+                size = head_future.result()
+                file_sizes[local_dest.name] = size
+                if size is not None:
+                    grand_total += size
+                else:
+                    total_known = False
+
+        # -- Build Docker-pull-style display ---------------------------------
+        display = MultiFileProgress(
+            total_bytes=grand_total,
+            total_known=total_known,
+            console=console,
+        )
+        for _, _relpath, local_dest in url_dests:
+            display.add_pending(local_dest.name)
+
+        try:
+            with display, ThreadPoolExecutor(max_workers=file_workers) as executor:
+                future_to_info: dict = {}
+                for url, _relpath, local_dest in url_dests:
+                    local_dest.parent.mkdir(parents=True, exist_ok=True)
+                    total_size = file_sizes.get(local_dest.name)
+                    cb = display.start_file(local_dest.name, total_size=total_size)
+                    fut = executor.submit(
+                        downloader.download,
+                        url,
+                        local_dest,
+                        resume=resume,
+                        workers=per_file_workers,
+                        chunk_size=chunk_size,
+                        progress=cb,
+                        expected_hash=expected_hash,
+                        expected_size=expected_size,
                     )
+                    future_to_info[fut] = (url, local_dest)
 
-                with results_lock:
-                    if not result.success:
-                        n_failed += 1
-                        _tqdm.write(f"  FAIL  {local_dest}\n        {result.message}")
-                    concurrent_results.append(result)
+                for future in as_completed(future_to_info):
+                    url, local_dest = future_to_info[future]
+                    try:
+                        result = future.result()
+                    except Exception as exc:
+                        result = DownloadResult(
+                            url=url,
+                            local_path=str(local_dest),
+                            size=0,
+                            elapsed=0,
+                            speed=0,
+                            success=False,
+                            message=str(exc),
+                        )
 
-                # Update progress bar from main thread
-                speed_str = ""
-                if result.success and result.speed and result.speed > 0:
-                    speed_mb = result.speed / (1024 * 1024)
-                    speed_str = f"{speed_mb:.1f}MB/s"
-                fname = local_dest.name
-                pbar.set_postfix_str(f"{fname[:20]} {speed_str}" if speed_str else fname[:25])
-                pbar.update(1)
-
-        pbar.close()
+                    with results_lock:
+                        if result.success:
+                            display.complete_file_with_size(
+                                local_dest.name,
+                                success=True,
+                                actual_size=result.size,
+                            )
+                        else:
+                            display.complete_file(local_dest.name, success=False)
+                            console.print(
+                                f"  [red]FAIL[/red]  {local_dest}\n        {result.message}"
+                            )
+                        concurrent_results.append(result)
+        finally:
+            pass  # display.__exit__ already called by the `with display:` block
 
         if len(concurrent_results) == 1:
             return concurrent_results[0]
