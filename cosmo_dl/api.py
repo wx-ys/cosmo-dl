@@ -236,15 +236,32 @@ def _download_concurrent(
     concurrent_results: list[DownloadResult] = []
     results_lock = threading.Lock()
 
+    # -- Build the ordered list of pending files -------------------------------
+    from collections import deque
+
+    _pending: deque[tuple[str, str | None, Path]] = deque(url_dests)
+
+    # Show per-file bars for at most 2× the number of worker slots, so the
+    # user can see what's actively downloading without flooding the terminal.
+    _max_visible = max(file_workers * 2, 4)
+
     with display, ThreadPoolExecutor(max_workers=file_workers) as executor:
         future_to_info: dict = {}
-        for url, _relpath, local_dest in url_dests:
+        _submit_lock = threading.Lock()
+
+        # -- Submit one file (called under _submit_lock) -----------------------
+        def _submit_one() -> bool:
+            """Pop the next pending file, start it, and submit to the executor.
+
+            Returns ``True`` if a file was submitted, ``False`` if the queue
+            is empty.
+            """
+            if not _pending:
+                return False
+            url, _relpath, local_dest = _pending.popleft()
             local_dest.parent.mkdir(parents=True, exist_ok=True)
             total_size = file_sizes.get(local_dest.name)
-            # Use enqueue_file so files only become "active" (with a visible
-            # progress bar) when their download actually starts — not when
-            # they are merely submitted to the executor's internal queue.
-            cb = display.enqueue_file(local_dest.name, total_size=total_size)
+            cb = display.start_file(local_dest.name, total_size=total_size)
             fut = executor.submit(
                 downloader.download,
                 url,
@@ -257,29 +274,54 @@ def _download_concurrent(
                 expected_size=expected_size,
             )
             future_to_info[fut] = (url, local_dest)
+            return True
 
-        for future in as_completed(future_to_info):
-            url, local_dest = future_to_info[future]
-            try:
-                result = future.result()
-            except Exception as exc:
-                result = DownloadResult(
-                    url=url,
-                    local_path=str(local_dest),
-                    size=0,
-                    elapsed=0,
-                    speed=0,
-                    success=False,
-                    message=str(exc),
-                )
+        # -- Seed the first window of visible bars ----------------------------
+        for _ in range(min(_max_visible, len(_pending))):
+            _submit_one()
 
-            with results_lock:
-                if result.success:
-                    display.complete_file(local_dest.name, success=True, actual_size=result.size)
-                else:
-                    display.complete_file(local_dest.name, success=False)
-                    console.print(f"  [red]FAIL[/red]  {local_dest}\n        {result.message}")
-                concurrent_results.append(result)
+        # -- Process completions, replenishing the window --------------------
+        while future_to_info:
+            for future in as_completed(future_to_info):
+                url, local_dest = future_to_info[future]
+                try:
+                    result = future.result()
+                except Exception as exc:
+                    result = DownloadResult(
+                        url=url,
+                        local_path=str(local_dest),
+                        size=0,
+                        elapsed=0,
+                        speed=0,
+                        success=False,
+                        message=str(exc),
+                    )
+
+                with results_lock:
+                    if result.success:
+                        display.complete_file(
+                            local_dest.name, success=True, actual_size=result.size
+                        )
+                    else:
+                        display.complete_file(local_dest.name, success=False)
+                        console.print(f"  [red]FAIL[/red]  {local_dest}\n        {result.message}")
+                    concurrent_results.append(result)
+
+                # Remove from the active set
+                del future_to_info[future]
+
+                # Replenish: start the next queued file so the visible window
+                # stays full.  `start_file` transitions pending → active and
+                # creates a per-file progress bar.
+                with _submit_lock:
+                    _submit_one()
+
+                # Only process one completion per iteration of the outer
+                # while-loop so we can refresh the active set between
+                # `as_completed` calls.  Without the break, `as_completed`
+                # iterates a frozen snapshot and we'd never see newly
+                # submitted futures.
+                break
 
     return concurrent_results
 
