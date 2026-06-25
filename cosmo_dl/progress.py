@@ -10,6 +10,7 @@ Provides two context-manager classes:
 from __future__ import annotations
 
 import threading
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -21,8 +22,6 @@ from rich.progress import (
     SpinnerColumn,
     TaskID,
     TextColumn,
-    TimeRemainingColumn,
-    TransferSpeedColumn,
 )
 
 _console = Console()
@@ -77,9 +76,9 @@ def _build_columns(text_format: str) -> tuple:
         " • ",
         DownloadColumn(),
         " • ",
-        TransferSpeedColumn(),
+        TextColumn("{task.fields[speed_str]}"),
         " • ",
-        TimeRemainingColumn(),
+        TextColumn("{task.fields[eta_str]}"),
     )
 
 
@@ -122,17 +121,61 @@ class SingleFileProgress:
             filename=label,
             total=None,
             start=True,
+            speed_str="?",
+            eta_str="-:--:--",
         )
+        self._start_time = time.monotonic()
+        self._stop_poll = threading.Event()
+        self._poll_thread: threading.Thread | None = None
 
     def __enter__(self) -> SingleFileProgress:
         self.progress.start()
+        self._poll_thread = threading.Thread(target=self._poll, daemon=True)
+        self._poll_thread.start()
         return self
 
     def __exit__(self, *args: object) -> None:
+        self._stop_poll.set()
         self.progress.stop()
+
+    def _poll(self) -> None:
+        """Refresh speed / ETA at ~2 Hz."""
+        while not self._stop_poll.is_set():
+            self._stop_poll.wait(0.5)
+            # _last_downloaded and _last_total are set by callback(); we just
+            # recompute speed / ETA from the cached values so the display
+            # stays responsive between downloader callbacks.
+            now = time.monotonic()
+            elapsed = now - self._start_time
+            dl = getattr(self, "_last_downloaded", 0)
+            tot = getattr(self, "_last_total", 0)
+
+            if elapsed >= 0.5 and dl > 0:
+                speed = dl / elapsed
+                speed_str = f"[cyan]{fmt_speed(speed)}[/cyan]"
+                if tot > 0 and speed > 0 and tot > dl:
+                    remaining = (tot - dl) / speed
+                    m, s = divmod(int(remaining), 60)
+                    h, m = divmod(m, 60)
+                    eta_str = f"{h}:{m:02d}:{s:02d}" if h else f"{m:02d}:{s:02d}"
+                else:
+                    eta_str = "-:--:--"
+            else:
+                speed_str = "?"
+                eta_str = "-:--:--"
+
+            self.progress.update(
+                self.task_id,
+                completed=dl,
+                total=tot or None,
+                speed_str=speed_str,
+                eta_str=eta_str,
+            )
 
     def callback(self, downloaded: int, total: int) -> None:
         """Progress callback for ``Downloader.download(progress=...)``."""
+        self._last_downloaded = downloaded
+        self._last_total = total
         if total > 0:
             self.progress.update(self.task_id, total=total, completed=downloaded)
         else:
@@ -151,6 +194,9 @@ class _FileState:
     status: str = "pending"  # pending | active | done | failed
     task_id: TaskID | None = None
     last: int = 0  # last reported downloaded bytes (for delta computation)
+    # Per-file speed / ETA tracking
+    start_time: float = 0.0  # monotonic timestamp of first byte
+    total_size: int | None = None  # expected file size (from HEAD or callback)
 
 
 class MultiFileProgress:
@@ -182,6 +228,7 @@ class MultiFileProgress:
         total_bytes: int = 0,
         total_known: bool = False,
         console: Console | None = None,
+        refresh_interval: float = 0.5,
     ) -> None:
         self.console = console or _console
         self._files: dict[str, _FileState] = {}
@@ -194,6 +241,9 @@ class MultiFileProgress:
         self._n_failed = 0
         self._n_active = 0
 
+        # Refresh interval for per-file speed / ETA polling (seconds)
+        self._refresh_interval = refresh_interval
+
         self.progress = Progress(
             *_MULTI_FILE_COLUMNS,
             console=self.console,
@@ -205,7 +255,10 @@ class MultiFileProgress:
             "",  # description set by _render_aggregate
             total=total_bytes if (total_known and total_bytes > 0) else None,
             start=True,
+            speed_str="?",
+            eta_str="-:--:--",
         )
+        self._agg_total: int | None = total_bytes if (total_known and total_bytes > 0) else None
 
         # -- Polling thread keeps aggregated speed/ETA responsive ------------
         self._stop_poll = threading.Event()
@@ -226,12 +279,82 @@ class MultiFileProgress:
         self.progress.stop()
 
     def _poll(self) -> None:
-        """Nudge the aggregate bar at ~2 Hz so speed / ETA stay fresh."""
+        """Refresh aggregate and per-file speed / ETA at ``refresh_interval`` Hz.
+
+        Unlike rich's built-in :class:`~rich.progress.TransferSpeedColumn` and
+        :class:`~rich.progress.TimeRemainingColumn` — which require multiple
+        progress samples separated in time — this method computes speed and
+        ETA directly from elapsed wall-clock time and pushes the results into
+        each task's ``speed_str`` / ``eta_str`` fields.  This works reliably
+        even for small files that receive only one or two progress callbacks.
+        """
+        # Per-poll tracking for the aggregate bar's speed / ETA
+        _agg_last_bytes = 0
+        _agg_last_time = time.monotonic()
+        _agg_speed = 0.0
+
         while not self._stop_poll.is_set():
-            self._stop_poll.wait(0.5)
+            self._stop_poll.wait(self._refresh_interval)
+            now = time.monotonic()
+
+            # -- Aggregate bar -------------------------------------------------
             with self._lock:
                 cur = self._shared_downloaded
-            self.progress.update(self._aggregate_task, completed=cur)
+
+            elapsed = now - _agg_last_time
+            if elapsed >= self._refresh_interval * 0.8:
+                delta = cur - _agg_last_bytes
+                if delta > 0 and elapsed > 0:
+                    _agg_speed = delta / elapsed
+                _agg_last_bytes = cur
+                _agg_last_time = now
+
+            agg_total = self._agg_total
+            agg_speed_str = f"[cyan]{fmt_speed(_agg_speed)}[/cyan]" if _agg_speed > 0 else "?"
+            if _agg_speed > 0 and agg_total is not None and agg_total > 0:
+                remaining = (agg_total - cur) / _agg_speed
+                m, s = divmod(int(remaining), 60)
+                h, m = divmod(m, 60)
+                agg_eta_str = f"{h}:{m:02d}:{s:02d}" if h else f"{m:02d}:{s:02d}"
+            else:
+                agg_eta_str = "-:--:--"
+
+            self.progress.update(
+                self._aggregate_task,
+                completed=cur,
+                speed_str=agg_speed_str,
+                eta_str=agg_eta_str,
+            )
+
+            # -- Per-file bars ------------------------------------------------
+            for _key, state in list(self._files.items()):
+                if state.status != "active" or state.task_id is None:
+                    continue
+
+                elapsed_file = now - state.start_time
+                if elapsed_file >= 0.5 and state.last > 0:
+                    file_speed = state.last / elapsed_file
+                    file_speed_str = (
+                        f"[cyan]{fmt_speed(file_speed)}[/cyan]" if file_speed > 0 else "?"
+                    )
+                    if file_speed > 0 and state.total_size and state.total_size > state.last:
+                        remaining_f = (state.total_size - state.last) / file_speed
+                        mf, sf = divmod(int(remaining_f), 60)
+                        hf, mf = divmod(mf, 60)
+                        file_eta_str = f"{hf}:{mf:02d}:{sf:02d}" if hf else f"{mf:02d}:{sf:02d}"
+                    else:
+                        file_eta_str = "-:--:--"
+                else:
+                    file_speed_str = "?"
+                    file_eta_str = "-:--:--"
+
+                self.progress.update(
+                    state.task_id,
+                    completed=state.last,
+                    total=state.total_size,
+                    speed_str=file_speed_str,
+                    eta_str=file_eta_str,
+                )
 
     # ------------------------------------------------------------------
     # Public API
@@ -256,13 +379,18 @@ class MultiFileProgress:
                 self._n_active += 1
             state.status = "active"
         state.last = 0
+        state.start_time = time.monotonic()
+        state.total_size = total_size
         self._files[key] = state
 
-        # Add a per-file task row
+        # Add a per-file task row.  Speed / ETA are empty initially;
+        # _poll fills them in once there is data.
         task_id = self.progress.add_task(
             f"  {key[:48]}",
             total=total_size,
             start=True,
+            speed_str="",
+            eta_str="",
         )
         state.task_id = task_id
 
@@ -301,6 +429,11 @@ class MultiFileProgress:
             st = self._files.get(file_key)
             if st is None:
                 return
+            # Update total from the downloader's response (may be more
+            # accurate than the HEAD pre-fetch, or set for the first time
+            # when HEAD returned no Content-Length).
+            if total > 0 and st.total_size != total:
+                st.total_size = total
             tid = st.task_id
             if tid is not None:
                 if total > 0:
@@ -312,8 +445,8 @@ class MultiFileProgress:
             with self._lock:
                 self._shared_downloaded += delta
                 cur = self._shared_downloaded
-            # Nudge aggregate bar on every chunk so TransferSpeedColumn
-            # and TimeRemainingColumn get frequent data points.
+            # Nudge aggregate bar on every chunk so speed/ETA stay fresh
+            # between _poll cycles.
             self.progress.update(self._aggregate_task, completed=cur)
 
         return cb
