@@ -7,6 +7,7 @@ and :func:`download`.
 from __future__ import annotations
 
 import threading
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from urllib.parse import urlparse
@@ -118,6 +119,7 @@ def explore(
     include: str = "*",
     exclude: str | None = None,
     auth: AuthConfig | None = None,
+    on_progress: Callable[[int, int, str], None] | None = None,
 ) -> list[FileEntry]:
     """Discover files at *url* by parsing HTML directory listings or JSON APIs.
 
@@ -135,6 +137,10 @@ def explore(
         ``fnmatch``-style glob for names to *exclude*.
     auth : AuthConfig or None
         Optional authentication for the HTTP requests (e.g. TNG API key).
+    on_progress : callable or None
+        Optional callback ``on_progress(files_found, total_bytes, scanning_url)``.
+        Fired before each HTTP directory scrape and after each matching file
+        entry is discovered.
 
     Returns
     -------
@@ -150,22 +156,115 @@ def explore(
             max_depth=max_depth,
             include=include,
             exclude=exclude,
+            on_progress=on_progress,
         )
     finally:
         if session is not None:
             session.close()
 
 
-# Reused in download_cmd.py
-def _fmt_speed(bytes_per_second: float) -> str:
-    """Format a bytes-per-second rate as a human-readable string."""
-    if bytes_per_second >= 1024 * 1024:
-        return f"{bytes_per_second / (1024 * 1024):.1f} MB/s"
-    elif bytes_per_second >= 1024:
-        return f"{bytes_per_second / 1024:.0f} KB/s"
-    elif bytes_per_second > 0:
-        return f"{bytes_per_second:.0f} B/s"
-    return ""
+def _download_concurrent(
+    url_dests: list[tuple[str, str | None, Path]],
+    *,
+    downloader: Downloader,
+    session: Session,
+    file_workers: int,
+    per_file_workers: int,
+    resume: bool,
+    chunk_size: int,
+    expected_hash: str | None,
+    expected_size: int | None,
+) -> list[DownloadResult]:
+    """Download multiple files concurrently with a :class:`MultiFileProgress` display."""
+
+    # ------------------------------------------------------------------
+    # Pre-fetch Content-Length for every URL via parallel HEAD requests
+    # so each file bar and the aggregate bar can show real totals.
+    # ------------------------------------------------------------------
+    grand_total = 0
+    total_known = True
+    file_sizes: dict[str, int | None] = {}
+
+    def _fetch_content_length(url: str) -> int | None:
+        """Return Content-Length for *url* (HEAD request), or None."""
+        try:
+            resp = session.head(url)
+            cl = resp.headers.get("Content-Length")
+            if cl is not None:
+                return int(cl)
+        except Exception:
+            pass
+        return None
+
+    with ThreadPoolExecutor(max_workers=min(file_workers, len(url_dests))) as head_executor:
+        size_futures = {
+            head_executor.submit(_fetch_content_length, url): (url, local_dest)
+            for url, _, local_dest in url_dests
+        }
+        for head_future in as_completed(size_futures):
+            url, local_dest = size_futures[head_future]
+            size = head_future.result()
+            file_sizes[local_dest.name] = size
+            if size is not None:
+                grand_total += size
+            else:
+                total_known = False
+
+    # -- Build display ----------------------------------------------------
+    display = MultiFileProgress(
+        total_bytes=grand_total,
+        total_known=total_known,
+        console=console,
+    )
+    for _, _relpath, local_dest in url_dests:
+        display.add_pending(local_dest.name)
+
+    concurrent_results: list[DownloadResult] = []
+    results_lock = threading.Lock()
+
+    with display, ThreadPoolExecutor(max_workers=file_workers) as executor:
+        future_to_info: dict = {}
+        for url, _relpath, local_dest in url_dests:
+            local_dest.parent.mkdir(parents=True, exist_ok=True)
+            total_size = file_sizes.get(local_dest.name)
+            cb = display.start_file(local_dest.name, total_size=total_size)
+            fut = executor.submit(
+                downloader.download,
+                url,
+                local_dest,
+                resume=resume,
+                workers=per_file_workers,
+                chunk_size=chunk_size,
+                progress=cb,
+                expected_hash=expected_hash,
+                expected_size=expected_size,
+            )
+            future_to_info[fut] = (url, local_dest)
+
+        for future in as_completed(future_to_info):
+            url, local_dest = future_to_info[future]
+            try:
+                result = future.result()
+            except Exception as exc:
+                result = DownloadResult(
+                    url=url,
+                    local_path=str(local_dest),
+                    size=0,
+                    elapsed=0,
+                    speed=0,
+                    success=False,
+                    message=str(exc),
+                )
+
+            with results_lock:
+                if result.success:
+                    display.complete_file(local_dest.name, success=True, actual_size=result.size)
+                else:
+                    display.complete_file(local_dest.name, success=False)
+                    console.print(f"  [red]FAIL[/red]  {local_dest}\n        {result.message}")
+                concurrent_results.append(result)
+
+    return concurrent_results
 
 
 def download(
@@ -177,7 +276,7 @@ def download(
     file_workers: int = 4,
     chunk_size: int = 10 * MB,
     rate_limit: str | None = None,
-    progress: object = None,
+    progress: Callable[[int, int], None] | None = None,
     expected_hash: str | None = None,
     expected_size: int | None = None,
     output_dir: str = "./cosmo-dl-downloads",
@@ -225,12 +324,28 @@ def download(
         A single result when downloading one URL; a list when downloading
         multiple URLs.
     """
-    # Use resolve_with_relpath to get URL + download_relpath pairs
-    pairs = _resolve_target_with_paths(target)
-    # Fall back to plain URL resolution for backward compat
-    if not pairs:
-        urls = _resolve_target(target)
-        pairs = [(u, None) for u in urls]
+    # Resolve target → concrete URLs.  For tree-based sources (FIRE2, etc.)
+    # this may scrape multiple HTTP directory listings; show a spinner so the
+    # user knows work is happening.
+    import cosmo_dl.progress as _progress_mod
+
+    with console.status("[bold blue]Resolving target...[/bold blue]") as status:
+
+        def _on_resolve_progress(files_found: int, total_bytes: int, scanning_url: str) -> None:
+            short = scanning_url.rstrip("/").rsplit("/", 1)[-1] or scanning_url
+            status.update(
+                f"[bold blue]Scanning {short}/...[/bold blue] ([green]{files_found}[/green] files)"
+            )
+
+        _progress_mod._registry_resolve_hook = _on_resolve_progress
+        try:
+            pairs = _resolve_target_with_paths(target)
+            # Fall back to plain URL resolution for backward compat
+            if not pairs:
+                urls = _resolve_target(target)
+                pairs = [(u, None) for u in urls]
+        finally:
+            _progress_mod._registry_resolve_hook = None
 
     # Look up auth from the registry if the target is a source/dataset.
     # TNG API file URLs (e.g. www.tng-project.org/api/.../files/...) require
@@ -299,7 +414,7 @@ def download(
                         resume=resume,
                         workers=per_file_workers,
                         chunk_size=chunk_size,
-                        progress=cb,  # type: ignore[arg-type]
+                        progress=cb,
                         expected_hash=expected_hash,
                         expected_size=expected_size,
                     )
@@ -316,102 +431,17 @@ def download(
             return results
 
         # --- Concurrent path (file_workers > 1, multiple files) -----------
-        concurrent_results: list[DownloadResult] = []
-        results_lock = threading.Lock()
-
-        # ------------------------------------------------------------------
-        # Pre-fetch Content-Length for every URL via parallel HEAD requests
-        # so each file bar and the aggregate bar can show real totals.
-        # ------------------------------------------------------------------
-        grand_total = 0
-        total_known = True
-        file_sizes: dict[str, int | None] = {}
-
-        def _fetch_content_length(url: str) -> int | None:
-            """Return Content-Length for *url* (HEAD request), or None."""
-            try:
-                resp = session.head(url)
-                cl = resp.headers.get("Content-Length")
-                if cl is not None:
-                    return int(cl)
-            except Exception:
-                pass
-            return None
-
-        with ThreadPoolExecutor(max_workers=min(file_workers, len(url_dests))) as head_executor:
-            size_futures = {
-                head_executor.submit(_fetch_content_length, url): (url, local_dest)
-                for url, _, local_dest in url_dests
-            }
-            for head_future in as_completed(size_futures):
-                url, local_dest = size_futures[head_future]
-                size = head_future.result()
-                file_sizes[local_dest.name] = size
-                if size is not None:
-                    grand_total += size
-                else:
-                    total_known = False
-
-        # -- Build Docker-pull-style display ---------------------------------
-        display = MultiFileProgress(
-            total_bytes=grand_total,
-            total_known=total_known,
-            console=console,
+        concurrent_results = _download_concurrent(
+            url_dests,
+            downloader=downloader,
+            session=session,
+            file_workers=file_workers,
+            per_file_workers=per_file_workers,
+            resume=resume,
+            chunk_size=chunk_size,
+            expected_hash=expected_hash,
+            expected_size=expected_size,
         )
-        for _, _relpath, local_dest in url_dests:
-            display.add_pending(local_dest.name)
-
-        try:
-            with display, ThreadPoolExecutor(max_workers=file_workers) as executor:
-                future_to_info: dict = {}
-                for url, _relpath, local_dest in url_dests:
-                    local_dest.parent.mkdir(parents=True, exist_ok=True)
-                    total_size = file_sizes.get(local_dest.name)
-                    cb = display.start_file(local_dest.name, total_size=total_size)
-                    fut = executor.submit(
-                        downloader.download,
-                        url,
-                        local_dest,
-                        resume=resume,
-                        workers=per_file_workers,
-                        chunk_size=chunk_size,
-                        progress=cb,
-                        expected_hash=expected_hash,
-                        expected_size=expected_size,
-                    )
-                    future_to_info[fut] = (url, local_dest)
-
-                for future in as_completed(future_to_info):
-                    url, local_dest = future_to_info[future]
-                    try:
-                        result = future.result()
-                    except Exception as exc:
-                        result = DownloadResult(
-                            url=url,
-                            local_path=str(local_dest),
-                            size=0,
-                            elapsed=0,
-                            speed=0,
-                            success=False,
-                            message=str(exc),
-                        )
-
-                    with results_lock:
-                        if result.success:
-                            display.complete_file_with_size(
-                                local_dest.name,
-                                success=True,
-                                actual_size=result.size,
-                            )
-                        else:
-                            display.complete_file(local_dest.name, success=False)
-                            console.print(
-                                f"  [red]FAIL[/red]  {local_dest}\n        {result.message}"
-                            )
-                        concurrent_results.append(result)
-        finally:
-            pass  # display.__exit__ already called by the `with display:` block
-
         if len(concurrent_results) == 1:
             return concurrent_results[0]
         return concurrent_results

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from fnmatch import fnmatch
 from urllib.parse import urljoin
 
@@ -52,6 +53,8 @@ class URLExplorer:
         max_depth: int | None = None,
         include: str = "*",
         exclude: str | None = None,
+        on_progress: Callable[[int, int, str], None] | None = None,
+        _counts: list[int] | None = None,
     ) -> list[FileEntry]:
         """Fetch *url*, parse its listing, and return matching entries.
 
@@ -70,12 +73,28 @@ class URLExplorer:
             ``fnmatch``-style glob for names to *include* (default ``"*"``).
         exclude : str or None
             ``fnmatch``-style glob for names to *exclude*.
+        on_progress : callable or None
+            Optional callback ``on_progress(files_found, total_bytes, scanning_url)``.
+            Fired **before** each HTTP fetch (``scanning_url`` is the URL being
+            scraped) and after each matching file entry is appended
+            (``scanning_url`` is ``""``).  Use to drive real-time progress
+            displays during long exploration scans.
+        _counts : list[int] or None
+            Internal accumulator for cross-recursion progress tracking.
+            Do not pass this from public callers.
 
         Returns
         -------
         list[FileEntry]
             List of matching file and directory entries.
         """
+        if _counts is None:
+            _counts = [0, 0]  # [files_found, total_bytes]
+
+        # -- Signal that we're about to scan this URL ----------------------
+        if on_progress:
+            on_progress(_counts[0], _counts[1], url)
+
         page = self._fetch_page(url)
         if page is None:
             return []
@@ -100,11 +119,18 @@ class URLExplorer:
                         max_depth=next_depth,
                         include=include,
                         exclude=exclude,
+                        on_progress=on_progress,
+                        _counts=_counts,
                     )
                 )
 
             if self._matches_filter(entry.name, include, exclude):
                 result.append(entry)
+                _counts[0] += 1
+                if entry.size:
+                    _counts[1] += entry.size
+                if on_progress:
+                    on_progress(_counts[0], _counts[1], "")
 
         return result
 

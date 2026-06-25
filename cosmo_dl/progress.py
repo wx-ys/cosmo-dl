@@ -27,35 +27,64 @@ from rich.progress import (
 
 _console = Console()
 
+
+# Module-level progress hook for registry tree scraping.
+# Set by ``api.download()`` before target resolution; cleared afterwards.
+# ``fire._scrape_dir()`` checks this hook to report real-time progress.
+_registry_resolve_hook: Callable[[int, int, str], None] | None = None
+
+
+# ---------------------------------------------------------------------------
+# Shared helpers
+# ---------------------------------------------------------------------------
+
+
+def fmt_speed(bytes_per_second: float) -> str:
+    """Format a bytes-per-second rate as a human-readable string."""
+    if bytes_per_second >= 1024 * 1024:
+        return f"{bytes_per_second / (1024 * 1024):.1f} MB/s"
+    elif bytes_per_second >= 1024:
+        return f"{bytes_per_second / 1024:.0f} KB/s"
+    elif bytes_per_second > 0:
+        return f"{bytes_per_second:.0f} B/s"
+    return ""
+
+
+def fmt_bytes(size: int) -> str:
+    """Format a byte count as a human-readable string."""
+    if size >= 1024 * 1024 * 1024:
+        return f"{size / (1024**3):.1f} GiB"
+    elif size >= 1024 * 1024:
+        return f"{size / (1024**2):.1f} MiB"
+    elif size >= 1024:
+        return f"{size / 1024:.0f} KiB"
+    return f"{size} B"
+
+
 # ---------------------------------------------------------------------------
 # Shared column definitions
 # ---------------------------------------------------------------------------
 
-_SINGLE_FILE_COLUMNS = (
-    SpinnerColumn(),
-    TextColumn("[bold blue]{task.fields[filename]}"),
-    BarColumn(bar_width=None, pulse_style="bar.back"),
-    "[progress.percentage]{task.percentage:>3.0f}%",
-    " • ",
-    DownloadColumn(),
-    " • ",
-    TransferSpeedColumn(),
-    " • ",
-    TimeRemainingColumn(),
-)
 
-_MULTI_FILE_COLUMNS = (
-    SpinnerColumn(),
-    TextColumn("{task.description}"),
-    BarColumn(bar_width=None, pulse_style="bar.back"),
-    "[progress.percentage]{task.percentage:>3.0f}%",
-    " • ",
-    DownloadColumn(),
-    " • ",
-    TransferSpeedColumn(),
-    " • ",
-    TimeRemainingColumn(),
-)
+def _build_columns(text_format: str) -> tuple:
+    """Return a standard progress-column tuple with *text_format* as the
+    :class:`~rich.progress.TextColumn` format string."""
+    return (
+        SpinnerColumn(),
+        TextColumn(text_format),
+        BarColumn(bar_width=None, pulse_style="bar.back"),
+        "[progress.percentage]{task.percentage:>3.0f}%",
+        " • ",
+        DownloadColumn(),
+        " • ",
+        TransferSpeedColumn(),
+        " • ",
+        TimeRemainingColumn(),
+    )
+
+
+_SINGLE_FILE_COLUMNS = _build_columns("[bold blue]{task.fields[filename]}")
+_MULTI_FILE_COLUMNS = _build_columns("{task.description}")
 
 
 # ---------------------------------------------------------------------------
@@ -160,6 +189,11 @@ class MultiFileProgress:
         self._shared_downloaded = 0
         self._lock = threading.Lock()
 
+        # Counters so _render_aggregate is O(1), not O(n)
+        self._n_done = 0
+        self._n_failed = 0
+        self._n_active = 0
+
         self.progress = Progress(
             *_MULTI_FILE_COLUMNS,
             console=self.console,
@@ -217,7 +251,10 @@ class MultiFileProgress:
         ``Downloader.download(progress=...)``.
         """
         state = self._files.get(key) or _FileState()
-        state.status = "active"
+        if state.status != "active":
+            if state.status == "pending":
+                self._n_active += 1
+            state.status = "active"
         state.last = 0
         self._files[key] = state
 
@@ -255,36 +292,37 @@ class MultiFileProgress:
 
         return cb
 
-    def complete_file(self, key: str, *, success: bool = True) -> None:
-        """Mark a file as done (●) or failed (✗) and hide its progress bar."""
+    def complete_file(self, key: str, *, success: bool = True, actual_size: int = 0) -> None:
+        """Mark a file as done or failed and hide its progress bar.
+
+        Parameters
+        ----------
+        key : str
+            File key (typically the filename).
+        success : bool
+            ``True`` for a successful download, ``False`` for a failure.
+        actual_size : int
+            Actual bytes downloaded.  Provide this for already-downloaded
+            files whose progress callback never fired (the downloader raises
+            an internal sentinel before the first callback invocation).
+        """
         state = self._files.get(key)
         if state is None:
             return
+        was_active = state.status == "active"
         state.status = "done" if success else "failed"
+        if was_active:
+            self._n_active -= 1
+        if success:
+            self._n_done += 1
+        else:
+            self._n_failed += 1
         if state.task_id is not None:
             self.progress.update(state.task_id, visible=False)
-        self._render_aggregate()
-
-    def complete_file_with_size(
-        self,
-        key: str,
-        *,
-        success: bool = True,
-        actual_size: int = 0,
-    ) -> None:
-        """Like :meth:`complete_file` but also credits *actual_size* to the
-        aggregate counter.
-
-        Use for already-downloaded files whose callback never fired.
-        """
         if actual_size > 0:
             with self._lock:
                 self._shared_downloaded += actual_size
-        self.complete_file(key, success=success)
-
-    def set_aggregate_total(self, total: int) -> None:
-        """Set the aggregate total (from HEAD pre-fetch)."""
-        self.progress.update(self._aggregate_task, total=total)
+        self._render_aggregate()
 
     # ------------------------------------------------------------------
     # Internal
@@ -293,17 +331,9 @@ class MultiFileProgress:
     def _render_aggregate(self) -> None:
         """Build the file-count summary and push it to the aggregate task."""
         n_total = len(self._files)
-        n_done = sum(1 for s in self._files.values() if s.status == "done")
-        n_failed = sum(1 for s in self._files.values() if s.status == "failed")
-        n_active = sum(1 for s in self._files.values() if s.status == "active")
-
-        parts = [f"{n_done}/{n_total} files"]
-        if n_active:
-            parts.append(f" • {n_active} active")
-        if n_failed:
-            parts.append(f" • {n_failed} failed")
-
-        self.progress.update(
-            self._aggregate_task,
-            description="".join(parts),
-        )
+        parts = [f"{self._n_done}/{n_total} files"]
+        if self._n_active:
+            parts.append(f" • {self._n_active} active")
+        if self._n_failed:
+            parts.append(f" • {self._n_failed} failed")
+        self.progress.update(self._aggregate_task, description="".join(parts))

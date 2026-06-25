@@ -216,6 +216,15 @@ def _scrape_dir(url: str) -> list[tuple[str, str, bool]]:
     # Sort: directories first (alphabetical), then files (alphabetical)
     entries.sort(key=lambda e: (not e[2], e[0].lower()))
 
+    # -- Report progress via module-level hook (set by api.download) -----
+    try:
+        from cosmo_dl.progress import _registry_resolve_hook
+
+        if _registry_resolve_hook is not None:
+            _registry_resolve_hook(len(entries), 0, url)
+    except Exception:
+        pass
+
     return entries
 
 

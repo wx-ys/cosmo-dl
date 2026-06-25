@@ -12,6 +12,7 @@ from cosmo_dl.api import download as api_download
 from cosmo_dl.api import explore as api_explore
 from cosmo_dl.engine.file_manager import FileManager
 from cosmo_dl.engine.types import DownloadResult
+from cosmo_dl.progress import MultiFileProgress, fmt_bytes, fmt_speed
 
 console = Console()
 
@@ -93,23 +94,46 @@ def _do_download(
 ):
     """Actual download logic, factored out for clean interrupt handling."""
     if recursive and (target.startswith("http://") or target.startswith("https://")):
-        console.print(f"[dim]Exploring {target} ...[/dim]")
-        files = api_explore(target, recursive=True, include=include)
+        # Extract a short label from the URL for the progress display
+        _target_label = target.rstrip("/").rsplit("/", 1)[-1] or target
+
+        with console.status(f"[bold blue]Scanning {_target_label}...[/bold blue]") as status:
+
+            def _on_progress(files_found: int, total_bytes: int, scanning_url: str) -> None:
+                if scanning_url:
+                    # Just entered a new directory — show what we're scanning
+                    short = scanning_url.rstrip("/").rsplit("/", 1)[-1] or scanning_url
+                    status.update(
+                        f"[bold blue]Scanning {short}/[/bold blue] "
+                        f"([green]{files_found}[/green] files so far)"
+                    )
+                else:
+                    size_str = fmt_bytes(total_bytes) if total_bytes else "..."
+                    status.update(
+                        f"[bold blue]Exploring...[/bold blue] "
+                        f"[green]{files_found}[/green] files "
+                        f"([dim]{size_str}[/dim])"
+                    )
+
+            files = api_explore(target, recursive=True, include=include, on_progress=_on_progress)
         if not files:
             console.print("[yellow]No files found.[/yellow]")
             return
         console.print(f"Found [green]{len(files)}[/green] file(s). Starting download...\n")
 
-        from cosmo_dl.progress import MultiFileProgress
-
         succeeded = 0
         failed = 0
         display = MultiFileProgress(console=console)
-        for entry in files:
-            display.add_pending(entry.name)
 
         with display:
             for entry in files:
+                display.add_pending(entry.name)
+
+            for entry in files:
+                if _interrupted:
+                    console.print("[yellow]Stopping — interrupt received.[/yellow]")
+                    break
+
                 local_path = FileManager.mirror_path(
                     entry.url,
                     base_url=target,
@@ -134,9 +158,7 @@ def _do_download(
                     single: DownloadResult = result  # type: ignore[assignment]
                     if single.success:
                         succeeded += 1
-                        display.complete_file_with_size(
-                            entry.name, success=True, actual_size=single.size
-                        )
+                        display.complete_file(entry.name, success=True, actual_size=single.size)
                     else:
                         failed += 1
                         display.complete_file(entry.name, success=False)
@@ -167,10 +189,10 @@ def _do_download(
 def _print_result(r) -> None:
     """Print a single :class:`DownloadResult` with rich styling."""
     if r.success:
-        size_str = _fmt_bytes(r.size)
+        size_str = fmt_bytes(r.size)
         speed_str = ""
         if r.speed > 0:
-            speed_str = f" @ [cyan]{_fmt_speed(r.speed)}[/cyan]"
+            speed_str = f" @ [cyan]{fmt_speed(r.speed)}[/cyan]"
         console.print(f"  [green]✓[/green] {r.local_path}  [dim]({size_str}{speed_str})[/dim]")
         if r.checksum:
             algo, _, digest = r.checksum.partition(":")
@@ -178,25 +200,3 @@ def _print_result(r) -> None:
     else:
         console.print(f"  [red]✗ FAILED:[/red] {r.local_path}")
         console.print(f"    [red]{r.message}[/red]")
-
-
-def _fmt_bytes(size: int) -> str:
-    """Format a byte count as a human-readable string."""
-    if size >= 1024 * 1024 * 1024:
-        return f"{size / (1024**3):.1f} GiB"
-    elif size >= 1024 * 1024:
-        return f"{size / (1024**2):.1f} MiB"
-    elif size >= 1024:
-        return f"{size / 1024:.0f} KiB"
-    return f"{size} B"
-
-
-def _fmt_speed(bytes_per_second: float) -> str:
-    """Format a bytes-per-second rate as a human-readable string."""
-    if bytes_per_second >= 1024 * 1024:
-        return f"{bytes_per_second / (1024 * 1024):.1f} MB/s"
-    elif bytes_per_second >= 1024:
-        return f"{bytes_per_second / 1024:.0f} KB/s"
-    elif bytes_per_second > 0:
-        return f"{bytes_per_second:.0f} B/s"
-    return ""
