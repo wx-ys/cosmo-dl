@@ -268,7 +268,33 @@ class MultiFileProgress:
 
         self._render_aggregate()
 
-        # -- Build closure that updates both the per-file bar and aggregate --
+        return self._make_callback(key)
+
+    def enqueue_file(self, key: str, total_size: int | None = None) -> Callable[[int, int], None]:
+        """Register *key* as **queued** and return a deferred callback.
+
+        Unlike :meth:`start_file`, this does **not** create a progress bar
+        or count the file as active.  The returned callback automatically
+        promotes the file to ``"active"`` and creates its progress bar on
+        the first invocation (i.e. when the download actually begins).
+
+        Use this when submitting many files to a :class:`ThreadPoolExecutor`
+        — only files whose downloads have started get visible progress bars.
+        """
+        state = self._files.get(key)
+        if state is None:
+            state = _FileState(status="pending")
+            self._files[key] = state
+        state.status = "queued"
+        self._render_aggregate()
+        return self._make_deferred_callback(key, total_size)
+
+    # ------------------------------------------------------------------
+    # Callback factories
+    # ------------------------------------------------------------------
+
+    def _make_callback(self, key: str) -> Callable[[int, int], None]:
+        """Return a callback that updates the per-file bar + aggregate."""
         file_key = key
 
         def cb(downloaded: int, total: int) -> None:
@@ -288,6 +314,51 @@ class MultiFileProgress:
                 cur = self._shared_downloaded
             # Nudge aggregate bar on every chunk so TransferSpeedColumn
             # and TimeRemainingColumn get frequent data points.
+            self.progress.update(self._aggregate_task, completed=cur)
+
+        return cb
+
+    def _make_deferred_callback(
+        self, key: str, total_size: int | None
+    ) -> Callable[[int, int], None]:
+        """Return a callback that auto-activates the file on first call.
+
+        On the first invocation the file transitions ``"queued" → "active"``
+        and its per-file progress bar is created.  Subsequent calls behave
+        identically to the callback returned by :meth:`_make_callback`.
+        """
+        file_key = key
+        _activated = False
+
+        def cb(downloaded: int, total: int) -> None:
+            nonlocal _activated
+            st = self._files.get(file_key)
+            if st is None:
+                return
+
+            if not _activated and st.status == "queued":
+                _activated = True
+                st.status = "active"
+                self._n_active += 1
+                task_id = self.progress.add_task(
+                    f"  {file_key[:48]}",
+                    total=total_size,
+                    start=True,
+                )
+                st.task_id = task_id
+                self._render_aggregate()
+
+            tid = st.task_id
+            if tid is not None:
+                if total > 0:
+                    self.progress.update(tid, total=total, completed=downloaded)
+                else:
+                    self.progress.update(tid, completed=downloaded, total=downloaded)
+            delta = downloaded - st.last
+            st.last = downloaded
+            with self._lock:
+                self._shared_downloaded += delta
+                cur = self._shared_downloaded
             self.progress.update(self._aggregate_task, completed=cur)
 
         return cb

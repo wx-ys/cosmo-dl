@@ -18,7 +18,7 @@ from cosmo_dl.engine.downloader import MB, Downloader
 from cosmo_dl.engine.explorer import URLExplorer
 from cosmo_dl.engine.session import Session
 from cosmo_dl.engine.types import AuthConfig, DownloadResult, FileEntry
-from cosmo_dl.progress import MultiFileProgress, SingleFileProgress
+from cosmo_dl.progress import MultiFileProgress, SingleFileProgress, fmt_bytes
 from cosmo_dl.registry.registry import Registry
 
 console = Console()
@@ -196,7 +196,15 @@ def _download_concurrent(
             pass
         return None
 
-    with ThreadPoolExecutor(max_workers=min(file_workers, len(url_dests))) as head_executor:
+    n_total_heads = len(url_dests)
+    n_heads_done = 0
+
+    with (
+        console.status(
+            f"[bold blue]Checking file sizes... [0/{n_total_heads}][/bold blue]"
+        ) as head_status,
+        ThreadPoolExecutor(max_workers=min(file_workers, n_total_heads)) as head_executor,
+    ):
         size_futures = {
             head_executor.submit(_fetch_content_length, url): (url, local_dest)
             for url, _, local_dest in url_dests
@@ -209,6 +217,12 @@ def _download_concurrent(
                 grand_total += size
             else:
                 total_known = False
+            n_heads_done += 1
+            head_status.update(
+                f"[bold blue]Checking file sizes... "
+                f"[{n_heads_done}/{n_total_heads}][/bold blue]"
+                f"([dim]{fmt_bytes(grand_total)}[/dim])"
+            )
 
     # -- Build display ----------------------------------------------------
     display = MultiFileProgress(
@@ -227,7 +241,10 @@ def _download_concurrent(
         for url, _relpath, local_dest in url_dests:
             local_dest.parent.mkdir(parents=True, exist_ok=True)
             total_size = file_sizes.get(local_dest.name)
-            cb = display.start_file(local_dest.name, total_size=total_size)
+            # Use enqueue_file so files only become "active" (with a visible
+            # progress bar) when their download actually starts — not when
+            # they are merely submitted to the executor's internal queue.
+            cb = display.enqueue_file(local_dest.name, total_size=total_size)
             fut = executor.submit(
                 downloader.download,
                 url,

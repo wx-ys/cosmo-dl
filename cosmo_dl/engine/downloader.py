@@ -343,18 +343,22 @@ class Downloader:
             if metadata.cd_filename:
                 dest = dest.parent / metadata.cd_filename
 
-            if cd_filename_known:
-                # -- Pre-download checks (real filename known) -----------------
-                self._check_already_downloaded(
-                    dest=dest,
-                    total=metadata.total,
-                    expected_size=expected_size,
-                    expected_hash=expected_hash,
-                    part_path=part_path,
-                    partial_size=partial_size,
-                    start_time=start_time,
-                )
+            # -- Pre-download checks (always run when total is known) ---------
+            self._check_already_downloaded(
+                dest=dest,
+                total=metadata.total,
+                expected_size=expected_size,
+                expected_hash=expected_hash,
+                part_path=part_path,
+                partial_size=partial_size,
+                start_time=start_time,
+            )
 
+            # When the filename from HEAD is known to be correct (no CD
+            # renaming expected), the partial-complete check and multi-worker
+            # path are safe to use.  Otherwise defer to _download_single which
+            # learns the real filename from the GET response.
+            if cd_filename_known:
                 pc_result = self._check_partial_complete(
                     part_path,
                     dest,
@@ -395,18 +399,27 @@ class Downloader:
                 #   1. real-name file exists, complete → skip
                 #   2. real-name file exists, mtime wrong → fix mtime, skip
                 #   3. URL-name file exists → rename to real name, fix mtime, skip
-                total_downloaded, final_dest = self._download_single(
-                    session=session,
-                    url=url,
-                    part_path=part_path,
-                    dest=dest,
-                    partial_size=partial_size,
-                    chunk_size=chunk_size,
-                    limiter=limiter,
-                    progress=progress,
-                    metadata=metadata,
-                    start_time=start_time,
-                )
+                #
+                # But first: if the partial file already covers the full
+                # known total, skip the HTTP GET and finalize immediately.
+                # This handles static file servers (e.g. FIRE2) whose HEAD
+                # response includes Content-Length but no Content-Disposition.
+                if metadata.total > 0 and partial_size >= metadata.total:
+                    self._finalize_download(part_path, dest, metadata.last_modified)
+                    total_downloaded, final_dest = metadata.total, dest
+                else:
+                    total_downloaded, final_dest = self._download_single(
+                        session=session,
+                        url=url,
+                        part_path=part_path,
+                        dest=dest,
+                        partial_size=partial_size,
+                        chunk_size=chunk_size,
+                        limiter=limiter,
+                        progress=progress,
+                        metadata=metadata,
+                        start_time=start_time,
+                    )
 
             # -- Post-download integrity check / hash computation ------------
             checksum: str | None = None
