@@ -182,7 +182,7 @@ def _download_concurrent(
     # so each file bar and the aggregate bar can show real totals.
     # ------------------------------------------------------------------
     grand_total = 0
-    total_known = True
+    n_unknown = 0
     file_sizes: dict[str, int | None] = {}
 
     def _fetch_content_length(url: str) -> int | None:
@@ -216,18 +216,25 @@ def _download_concurrent(
             if size is not None:
                 grand_total += size
             else:
-                total_known = False
+                n_unknown += 1
             n_heads_done += 1
+            detail = f"[dim]{fmt_bytes(grand_total)}[/dim]"
+            if n_unknown > 0:
+                detail += f" ([yellow]{n_unknown} unknown[/yellow])"
             head_status.update(
                 f"[bold blue]Checking file sizes... "
                 f"[{n_heads_done}/{n_total_heads}][/bold blue]"
-                f"([dim]{fmt_bytes(grand_total)}[/dim])"
+                f"({detail})"
             )
 
     # -- Build display ----------------------------------------------------
+    # When at least some file sizes are known, show the partial aggregate
+    # total immediately.  As files start downloading, their per-file
+    # callbacks report the real size from the GET response and the
+    # aggregate total is updated dynamically (see _make_callback).
     display = MultiFileProgress(
         total_bytes=grand_total,
-        total_known=total_known,
+        total_known=(grand_total > 0),
         console=console,
     )
     for _, _relpath, local_dest in url_dests:

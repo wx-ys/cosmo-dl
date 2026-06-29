@@ -433,7 +433,18 @@ class MultiFileProgress:
             # accurate than the HEAD pre-fetch, or set for the first time
             # when HEAD returned no Content-Length).
             if total > 0 and st.total_size != total:
+                old_size = st.total_size or 0
                 st.total_size = total
+                # Update the aggregate total so the overall progress bar
+                # shows a meaningful total even when some HEAD pre-fetches
+                # failed.  The aggregate grows by the delta between the
+                # real size and whatever we knew before (often 0).
+                if self._agg_total is not None or old_size != total:
+                    self._agg_total = (self._agg_total or 0) + (total - old_size)
+                    self.progress.update(
+                        self._aggregate_task,
+                        total=self._agg_total,
+                    )
             tid = st.task_id
             if tid is not None:
                 if total > 0:
@@ -480,6 +491,19 @@ class MultiFileProgress:
                 )
                 st.task_id = task_id
                 self._render_aggregate()
+
+            # Update total from the downloader's response.  When the HEAD
+            # pre-fetch didn't provide a size, this is the first time we
+            # learn it — update the aggregate total accordingly.
+            if total > 0 and st.total_size != total:
+                old_size = st.total_size or 0
+                st.total_size = total
+                if self._agg_total is not None or old_size != total:
+                    self._agg_total = (self._agg_total or 0) + (total - old_size)
+                    self.progress.update(
+                        self._aggregate_task,
+                        total=self._agg_total,
+                    )
 
             tid = st.task_id
             if tid is not None:

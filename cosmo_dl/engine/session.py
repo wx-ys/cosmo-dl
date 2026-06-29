@@ -215,9 +215,15 @@ class Session:
         return self._client
 
     def head(self, url: str, **kwargs: Any) -> requests.Response:
-        """Send a HEAD request."""
+        """Send a HEAD request.
+
+        Unlike :meth:`requests.Session.head`, redirects are followed by
+        default so that ``Content-Length`` and other headers from the
+        final destination are visible to callers.
+        """
         self._ensure_fresh_token()
         kwargs.setdefault("timeout", self._timeout)
+        kwargs.setdefault("allow_redirects", True)
         return self._client.head(url, **kwargs)
 
     def get(self, url: str, **kwargs: Any) -> requests.Response:
