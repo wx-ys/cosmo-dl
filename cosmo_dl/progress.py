@@ -292,6 +292,10 @@ class MultiFileProgress:
         _agg_last_bytes = 0
         _agg_last_time = time.monotonic()
         _agg_speed = 0.0
+        _agg_zero_cycles = 0
+
+        # Per-file instantaneous speed tracking: (file_key → (last_bytes, last_time))
+        _file_last: dict[str, tuple[int, float]] = {}
 
         while not self._stop_poll.is_set():
             self._stop_poll.wait(self._refresh_interval)
@@ -306,6 +310,13 @@ class MultiFileProgress:
                 delta = cur - _agg_last_bytes
                 if delta > 0 and elapsed > 0:
                     _agg_speed = delta / elapsed
+                    _agg_zero_cycles = 0
+                else:
+                    _agg_zero_cycles += 1
+                    # After ~2 s of no data, decay the speed to zero so the
+                    # display doesn't show a stale burst rate forever.
+                    if _agg_zero_cycles >= 4:
+                        _agg_speed = 0.0
                 _agg_last_bytes = cur
                 _agg_last_time = now
 
@@ -329,11 +340,32 @@ class MultiFileProgress:
             # -- Per-file bars ------------------------------------------------
             for _key, state in list(self._files.items()):
                 if state.status != "active" or state.task_id is None:
+                    # Clean up tracking when a file is no longer active
+                    _file_last.pop(_key, None)
                     continue
 
-                elapsed_file = now - state.start_time
-                if elapsed_file >= 0.5 and state.last > 0:
-                    file_speed = state.last / elapsed_file
+                # Compute instantaneous per-file speed (delta / elapsed),
+                # consistent with the aggregate speed calculation.
+                prev = _file_last.get(_key)
+                if prev is not None:
+                    prev_bytes, prev_time = prev
+                    file_delta = state.last - prev_bytes
+                    file_elapsed = now - prev_time
+                    if file_delta > 0 and file_elapsed >= 0.3:
+                        file_speed = file_delta / file_elapsed
+                    elif file_elapsed >= 2.0:
+                        # No progress for 2+ seconds → speed is effectively 0
+                        file_speed = 0.0
+                    else:
+                        # Not enough data yet — reuse last known speed
+                        file_speed = -1.0  # sentinel: keep previous
+                else:
+                    # First poll for this file — not enough data yet
+                    file_speed = -1.0
+
+                _file_last[_key] = (state.last, now)
+
+                if file_speed >= 0:
                     file_speed_str = (
                         f"[cyan]{fmt_speed(file_speed)}[/cyan]" if file_speed > 0 else "?"
                     )
@@ -344,17 +376,22 @@ class MultiFileProgress:
                         file_eta_str = f"{hf}:{mf:02d}:{sf:02d}" if hf else f"{mf:02d}:{sf:02d}"
                     else:
                         file_eta_str = "-:--:--"
+                elif state.last > 0:
+                    # Keep previous speed/ETA; just update completed/total
+                    file_speed_str = None  # don't overwrite
+                    file_eta_str = None
                 else:
                     file_speed_str = "?"
                     file_eta_str = "-:--:--"
 
-                self.progress.update(
-                    state.task_id,
-                    completed=state.last,
-                    total=state.total_size,
-                    speed_str=file_speed_str,
-                    eta_str=file_eta_str,
-                )
+                update_kwargs: dict = {"completed": state.last}
+                if state.total_size:
+                    update_kwargs["total"] = state.total_size
+                if file_speed_str is not None:
+                    update_kwargs["speed_str"] = file_speed_str
+                if file_eta_str is not None:
+                    update_kwargs["eta_str"] = file_eta_str
+                self.progress.update(state.task_id, **update_kwargs)
 
     # ------------------------------------------------------------------
     # Public API

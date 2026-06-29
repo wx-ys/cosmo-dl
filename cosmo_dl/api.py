@@ -306,8 +306,15 @@ def _download_concurrent(
 
                 with results_lock:
                     if result.success:
+                        # Only pass actual_size for already-downloaded files
+                        # whose progress callback was never invoked.  Normally
+                        # downloaded files have already had their bytes
+                        # accounted for chunk-by-chunk via the callback.
+                        already_had = result.message == "Already downloaded"
                         display.complete_file(
-                            local_dest.name, success=True, actual_size=result.size
+                            local_dest.name,
+                            success=True,
+                            actual_size=result.size if already_had else 0,
                         )
                     else:
                         display.complete_file(local_dest.name, success=False)
