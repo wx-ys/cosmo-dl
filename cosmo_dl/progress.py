@@ -287,15 +287,29 @@ class MultiFileProgress:
         ETA directly from elapsed wall-clock time and pushes the results into
         each task's ``speed_str`` / ``eta_str`` fields.  This works reliably
         even for small files that receive only one or two progress callbacks.
+
+        .. important::
+
+           Timestamps are **only** advanced when the corresponding byte count
+           changes.  This way ``elapsed`` measures the true interval between
+           data arrivals rather than the artificial poll interval, giving an
+           accurate instantaneous speed regardless of callback frequency.
         """
-        # Per-poll tracking for the aggregate bar's speed / ETA
+        # Per-poll tracking for the aggregate bar's speed / ETA.
+        # These are only updated when ``_shared_downloaded`` changes.
         _agg_last_bytes = 0
         _agg_last_time = time.monotonic()
         _agg_speed = 0.0
-        _agg_zero_cycles = 0
 
-        # Per-file instantaneous speed tracking: (file_key → (last_bytes, last_time))
+        # Per-file instantaneous speed tracking: (file_key → (last_bytes, last_time)).
+        # Timestamps are only advanced when ``state.last`` changes.
         _file_last: dict[str, tuple[int, float]] = {}
+
+        # Track the last time *any* data arrived so we can decay speeds
+        # when downloads genuinely stall (rather than between infrequent
+        # callbacks).
+        _agg_last_data_time = time.monotonic()
+        _file_last_data_time: dict[str, float] = {}
 
         while not self._stop_poll.is_set():
             self._stop_poll.wait(self._refresh_interval)
@@ -305,20 +319,17 @@ class MultiFileProgress:
             with self._lock:
                 cur = self._shared_downloaded
 
-            elapsed = now - _agg_last_time
-            if elapsed >= self._refresh_interval * 0.8:
-                delta = cur - _agg_last_bytes
-                if delta > 0 and elapsed > 0:
+            delta = cur - _agg_last_bytes
+            if delta > 0:
+                elapsed = now - _agg_last_time
+                if elapsed >= 0.3 and delta > 0:
                     _agg_speed = delta / elapsed
-                    _agg_zero_cycles = 0
-                else:
-                    _agg_zero_cycles += 1
-                    # After ~2 s of no data, decay the speed to zero so the
-                    # display doesn't show a stale burst rate forever.
-                    if _agg_zero_cycles >= 4:
-                        _agg_speed = 0.0
                 _agg_last_bytes = cur
                 _agg_last_time = now
+                _agg_last_data_time = now
+            elif _agg_speed > 0 and (now - _agg_last_data_time) >= 15.0:
+                # No data for 15+ seconds — downloads have stalled.
+                _agg_speed = 0.0
 
             agg_total = self._agg_total
             agg_speed_str = f"[cyan]{fmt_speed(_agg_speed)}[/cyan]" if _agg_speed > 0 else "?"
@@ -342,28 +353,39 @@ class MultiFileProgress:
                 if state.status != "active" or state.task_id is None:
                     # Clean up tracking when a file is no longer active
                     _file_last.pop(_key, None)
+                    _file_last_data_time.pop(_key, None)
                     continue
 
-                # Compute instantaneous per-file speed (delta / elapsed),
-                # consistent with the aggregate speed calculation.
+                # Compute instantaneous per-file speed.  The timestamp is
+                # **only** advanced when ``state.last`` changes, so
+                # ``file_elapsed`` measures the true interval between
+                # progress callbacks — not the artificial poll interval.
                 prev = _file_last.get(_key)
                 if prev is not None:
                     prev_bytes, prev_time = prev
                     file_delta = state.last - prev_bytes
-                    file_elapsed = now - prev_time
-                    if file_delta > 0 and file_elapsed >= 0.3:
-                        file_speed = file_delta / file_elapsed
-                    elif file_elapsed >= 2.0:
-                        # No progress for 2+ seconds → speed is effectively 0
-                        file_speed = 0.0
+                    if file_delta > 0:
+                        file_elapsed = now - prev_time
+                        if file_elapsed >= 0.3:
+                            file_speed = file_delta / file_elapsed
+                            _file_last[_key] = (state.last, now)
+                            _file_last_data_time[_key] = now
+                        else:
+                            # Too soon after the last data point — keep
+                            # previous speed.
+                            file_speed = -1.0
                     else:
-                        # Not enough data yet — reuse last known speed
-                        file_speed = -1.0  # sentinel: keep previous
+                        # No new data since last check.  Only decay the
+                        # speed when the file has been idle for a while.
+                        last_data = _file_last_data_time.get(_key)
+                        if last_data is not None and (now - last_data) >= 15.0:
+                            file_speed = 0.0
+                        else:
+                            file_speed = -1.0
                 else:
-                    # First poll for this file — not enough data yet
+                    # First poll for this file — seed the tracking.
                     file_speed = -1.0
-
-                _file_last[_key] = (state.last, now)
+                    _file_last[_key] = (state.last, now)
 
                 if file_speed >= 0:
                     file_speed_str = (
